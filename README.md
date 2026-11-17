@@ -21,3 +21,7 @@ mklink /J "<WoW folder>\_forever_\Interface\AddOns\Upkeep" "<this repo>\Upkeep"
 ```
 
 CombinedBagOrder also works on retail; link it into `_retail_\Interface\AddOns` the same way.
+
+## License
+
+MIT; see [LICENSE](LICENSE). The libraries bundled in `Libs` folders (LibStub, CallbackHandler, HereBeDragons) keep their own licenses.
