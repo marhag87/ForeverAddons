@@ -2,7 +2,9 @@
 -- blessings is on you, and the blessings you could still cast on your target. The same
 -- reminder covers weapon enchants (Shaman imbues, Rogue poisons) and buffs a class keeps
 -- on itself, listed per class in WEAPON_ENCHANTS and SELF_BUFFS below, and buffs any
--- class keeps up, such as a gatherer's Find Minerals or Find Herbs.
+-- class keeps up, such as a gatherer's Find Minerals or Find Herbs. Other addons can add
+-- clickable reminders of their own with Upkeep.AddReminder (see "Reminders from other
+-- addons" below).
 --
 -- This client restricts addons the way retail does. Established by testing in game:
 --   * Enumerating the spellbook and reading the combat log are forbidden outright, and
@@ -144,9 +146,12 @@ end
 local SEAL_PATTERN = "^Seal of"
 local FALLBACK_DURATION = 30  -- for timing a seal from your cast when its aura is unreadable
 
+local BAR_GAP = 18           -- between the player frame's health bar and the seal bar
+local BAR_FALLBACK_Y = -150  -- the seal bar's height from the screen's centre without one
+
 local bar = CreateFrame("Frame", nil, UIParent)
 bar:SetSize(220, 20)
-bar:SetPoint("CENTER", 0, -150)
+bar:SetPoint("CENTER", 0, BAR_FALLBACK_Y)
 bar:Hide()
 
 local barBg = bar:CreateTexture(nil, "BACKGROUND")
@@ -188,9 +193,9 @@ local function PlaceBar()
   local hbWidth = hb and hb:GetWidth()
   if hbWidth and hbWidth > 0 then
     bar:SetWidth(hbWidth * hb:GetEffectiveScale() / bar:GetEffectiveScale())
-    bar:SetPoint("BOTTOM", hb, "TOP", 0, 18)
+    bar:SetPoint("BOTTOM", hb, "TOP", 0, BAR_GAP)
   else
-    bar:SetPoint("CENTER", 0, -150)
+    bar:SetPoint("CENTER", 0, BAR_FALLBACK_Y)
   end
 end
 
@@ -411,17 +416,7 @@ end
 -- Icons are frames rather than bare textures so Blizzard's spell-alert glow, the game's
 -- own "press this now", can be attached to them. dir < 0 packs right to left from the
 -- parent's bottom-right corner, dir > 0 left to right from its bottom-left.
-local function MakeIcon(parent, list, i, dir)
-  local t = list[i]
-  if t then return t end
-  t = CreateFrame("Frame", nil, parent)
-  t:SetSize(ICON_SIZE, ICON_SIZE)
-  local step = (i - 1) * (ICON_SIZE + ICON_GAP)
-  if dir > 0 then
-    t:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", step, 0)
-  else
-    t:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -step, 0)
-  end
+local function AddIconArt(t)
   t.icon = t:CreateTexture(nil, "ARTWORK")
   t.icon:SetAllPoints()
   t.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)  -- trim the icon border
@@ -433,6 +428,20 @@ local function MakeIcon(parent, list, i, dir)
   t.glow:SetSize(ICON_SIZE * 1.4, ICON_SIZE * 1.4)
   t.glow:SetBlendMode("ADD")
   t.glow:Hide()
+end
+
+local function MakeIcon(parent, list, i, dir)
+  local t = list[i]
+  if t then return t end
+  t = CreateFrame("Frame", nil, parent)
+  t:SetSize(ICON_SIZE, ICON_SIZE)
+  local step = (i - 1) * (ICON_SIZE + ICON_GAP)
+  if dir > 0 then
+    t:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", step, 0)
+  else
+    t:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -step, 0)
+  end
+  AddIconArt(t)
   list[i] = t
   return t
 end
@@ -492,6 +501,175 @@ local function DrawSelf()
   end
   selfPanel:SetWidth(n * ICON_SIZE + (n - 1) * ICON_GAP)
   selfPanel:Show()
+end
+
+--------------------------------------------------------------------------------
+-- Reminders from other addons, through Upkeep.AddReminder and Upkeep.RemoveReminder.
+--
+-- They sit in the seal bar's corner, ahead of Upkeep's own icons, and a click on one
+-- can act: each is a secure action button, so it can cast a spell or set your focus.
+-- The game freezes such buttons in combat - they cannot appear, disappear, move or
+-- change what they do - so changes made in combat wait for it to end. One removed in
+-- combat dims at once and goes when combat ends. The combat glow works throughout.
+--
+-- For the same reason the frame holding them cannot move in combat, and neither can a
+-- frame it is anchored to. It is anchored where the seal bar's corner is rather than to
+-- the bar, so the bar stays free.
+--------------------------------------------------------------------------------
+
+local apiPanel = CreateFrame("Frame", nil, UIParent)
+apiPanel:SetSize(1, ICON_SIZE)
+
+local apiReminders = {}   -- id -> { icon, click, tooltip, glow, removed }
+local apiOrder = {}       -- ids, oldest first; the oldest sits in the corner
+local apiButtons = {}     -- buttons by position
+local apiShown = 0        -- how many buttons are laid out
+local apiDirty = false    -- a change is waiting for combat to end
+local apiPlaced = false   -- apiPanel has been put in the bar's corner
+
+local function ApiButton(i)
+  local b = apiButtons[i]
+  if b then return b end
+  b = CreateFrame("Button", nil, apiPanel, "SecureActionButtonTemplate")
+  b:SetSize(ICON_SIZE, ICON_SIZE)
+  b:SetPoint("BOTTOMRIGHT", apiPanel, "BOTTOMRIGHT", -(i - 1) * (ICON_SIZE + ICON_GAP), 0)
+  -- With key-down casting on (ActionButtonUseKeyDown) the template acts on the press,
+  -- so both halves of a click have to reach it.
+  b:RegisterForClicks("AnyUp", "AnyDown")
+  AddIconArt(b)
+  b:SetHighlightTexture("Interface/Buttons/ButtonHilight-Square", "ADD")
+  b:SetScript("OnEnter", function(self)
+    local r = self.id and apiReminders[self.id]
+    if r and r.tooltip then
+      GameTooltip:SetOwner(self, "ANCHOR_TOP")
+      GameTooltip:SetText(r.tooltip, 1, 1, 1, 1, true)
+      GameTooltip:Show()
+    end
+  end)
+  b:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+  apiButtons[i] = b
+  return b
+end
+
+-- Upkeep's own icons start after the reminders.
+local function ShiftSelfPanel()
+  local shift = apiShown * (ICON_SIZE + ICON_GAP)
+  selfPanel:ClearAllPoints()
+  selfPanel:SetPoint("BOTTOMRIGHT", bar, "TOPLEFT", -2 - shift, 2)
+end
+
+-- Out of combat only. Puts apiPanel where the seal bar's top-left corner is, matching
+-- PlaceBar's arithmetic.
+local function PlaceApiPanel()
+  if InCombatLockdown() then
+    apiDirty = true
+    return
+  end
+  apiPanel:ClearAllPoints()
+  local hb = PlayerHealthBar()
+  local hbWidth = hb and hb:GetWidth()
+  local w, h = bar:GetWidth(), bar:GetHeight()
+  if hbWidth and hbWidth > 0 then
+    apiPanel:SetPoint("BOTTOMRIGHT", hb, "TOP", -w / 2 - 2, BAR_GAP + h + 2)
+  else
+    apiPanel:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -w / 2 - 2, BAR_FALLBACK_Y + h / 2 + 2)
+  end
+  apiPlaced = true
+end
+
+-- Out of combat only: makes the buttons match apiReminders.
+local function LayoutApi()
+  if InCombatLockdown() then
+    apiDirty = true
+    return
+  end
+  apiDirty = false
+  if not apiPlaced then PlaceApiPanel() end
+  for i = #apiOrder, 1, -1 do
+    local id = apiOrder[i]
+    if apiReminders[id].removed then
+      apiReminders[id] = nil
+      table.remove(apiOrder, i)
+    end
+  end
+  for i, id in ipairs(apiOrder) do
+    local r = apiReminders[id]
+    local b = ApiButton(i)
+    for k in pairs(b.attributes or {}) do
+      b:SetAttribute(k, nil)
+    end
+    b.attributes = r.click
+    for k, v in pairs(r.click or {}) do
+      b:SetAttribute(k, v)
+    end
+    b.id = id
+    b:Show()
+  end
+  for i = #apiOrder + 1, #apiButtons do
+    local b = apiButtons[i]
+    SetGlow(b, false)
+    b.id = nil
+    b:Hide()
+  end
+  apiShown = #apiOrder
+  ShiftSelfPanel()
+end
+
+local function DrawApi()
+  local combat = UnitAffectingCombat("player")
+  local pulse = 0.4 + 0.6 * math.abs(math.sin(GetTime() * math.pi * 1.5))
+  for i = 1, apiShown do
+    local b = apiButtons[i]
+    local r = b.id and apiReminders[b.id]
+    if r then
+      b.icon:SetTexture(r.icon)
+      b.icon:SetDesaturated(true)
+      if r.removed then
+        b.icon:SetAlpha(0.25)
+        SetGlow(b, false)
+      else
+        b.icon:SetAlpha(combat and 1 or 0.65)
+        SetGlow(b, combat and r.glow, pulse)
+      end
+    end
+  end
+end
+
+-- The public API. id names the reminder; adding an id again updates it.
+-- info.icon:    texture path or file id.
+-- info.click:   secure action attributes for a click, e.g. { type = "spell", spell = 71 }
+--               or { type = "focus", unit = "party1" }. Without it a click does nothing.
+-- info.tooltip: text shown on mouseover.
+-- info.glow:    false to stay unlit in combat.
+Upkeep = Upkeep or {}
+
+function Upkeep.AddReminder(id, info)
+  if type(id) ~= "string" or type(info) ~= "table" then
+    error("Usage: Upkeep.AddReminder(id, info) with a string id and an info table", 2)
+  end
+  local click
+  if type(info.click) == "table" then
+    click = {}
+    for k, v in pairs(info.click) do click[k] = v end
+  end
+  local r = apiReminders[id]
+  if not r then
+    r = {}
+    apiReminders[id] = r
+    apiOrder[#apiOrder + 1] = id
+  end
+  r.icon = info.icon or "Interface/Icons/INV_Misc_QuestionMark"
+  r.click, r.tooltip, r.glow, r.removed = click, info.tooltip, info.glow ~= false, nil
+  LayoutApi()
+end
+
+function Upkeep.RemoveReminder(id)
+  local r = apiReminders[id]
+  if not r then return end
+  r.removed = true
+  LayoutApi()
 end
 
 local blessingShown  -- the blessing reminder's last answer, kept when a read fails
@@ -871,6 +1049,7 @@ local function UpdateSelf()
   WeaponReminders(selfTextures)
   SelfBuffReminders(selfTextures)
   DrawSelf()
+  DrawApi()
 end
 
 --------------------------------------------------------------------------------
@@ -1058,6 +1237,11 @@ local function Debug()
       tostring(st and st.rank),
       st and st.exp and string.format("%.0fs", st.exp - GetTime()) or "nil"))
   end
+  for _, id in ipairs(apiOrder) do
+    local r = apiReminders[id]
+    print(string.format("Upkeep: reminder %s from another addon%s%s", id, r.click and ", clickable" or "",
+      r.removed and ", going when combat ends" or ""))
+  end
 end
 
 local events = CreateFrame("Frame")
@@ -1066,6 +1250,7 @@ events:RegisterEvent("SPELLS_CHANGED")
 events:RegisterEvent("BAG_UPDATE_DELAYED")  -- poisons come and go from your bags
 events:RegisterEvent("ADDON_ACTION_FORBIDDEN")
 events:RegisterEvent("ADDON_ACTION_BLOCKED")
+events:RegisterEvent("PLAYER_REGEN_ENABLED")  -- reminder changes held back by combat
 events:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 
@@ -1077,10 +1262,13 @@ local sentCasts = {}
 events:SetScript("OnEvent", function(_, event, a1, a2, a3)
   if event == "PLAYER_LOGIN" then
     PlaceBar()
+    PlaceApiPanel()
     PlaceTargetPanel()
     SeedKnown()
     SeedWeaponEnchants()
     SeedSelfBuffs()
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    if apiDirty then LayoutApi() end
   elseif event == "BAG_UPDATE_DELAYED" then
     SeedWeaponEnchants()
   elseif event == "SPELLS_CHANGED" then

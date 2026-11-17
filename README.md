@@ -10,7 +10,7 @@ Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is 
 | [PartyOrder](PartyOrder) | Reorders Blizzard's raid-style party frames when you hold Ctrl+Alt and drag one party member onto another. |
 | [SyndicatorSync](SyndicatorSync) | Shares Syndicator's inventory data between two paired accounts in real time, for dual-boxing. |
 | [ThreatGap](ThreatGap) | Shows threat on enemy nameplates: a coloured strip on every mob and your exact threat lead or headroom on your target, with tank and non-tank views. |
-| [Upkeep](Upkeep) | Shows a duration bar for a Paladin's seal and reminds you of missing blessings, weapon enchants, class self-buffs and Find Minerals or Find Herbs. |
+| [Upkeep](Upkeep) | Shows a duration bar for a Paladin's seal and reminds you of missing blessings, weapon enchants, class self-buffs and Find Minerals or Find Herbs. Other addons can add clickable reminders to its row. |
 
 ## Installing
 
