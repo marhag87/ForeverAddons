@@ -3,6 +3,7 @@
 ## Notes: Shares Syndicator's inventory data between two paired accounts in real time, for dual-boxing.
 ## Version: 1.0.0
 ## Dependencies: Syndicator
+## IconTexture: Interface\Icons\INV_Misc_GroupNeedMore
 ## SavedVariables: SyndicatorSyncDB
 
 Util.lua

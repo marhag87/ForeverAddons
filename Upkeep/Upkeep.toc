@@ -3,5 +3,6 @@
 ## Notes: Duration bar for your Paladin seal, a reminder when none of your own blessings is on you, and the blessings you could still cast on your target. Also reminds you of a missing weapon enchant or self buff for your class, and of Find Minerals or Find Herbs if you know Mining or Herbalism.
 ## Author: Martin
 ## Version: 2.8
+## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
 
 Upkeep.lua

@@ -1,7 +1,9 @@
 ## Interface: 120105, 16001
 ## Title: Combined Bag Order
-## Notes: Combined bag: the last sort sits at the bottom, new loot fills from the top. On Forever with Syndicator, a bank tab on the bag shows your saved bank anywhere.
+## Notes: Combined bag: the last sort sits at the bottom, new loot fills from the top. On Forever with Syndicator, a bank button on the bag shows any character's saved bank anywhere.
 ## Version: 1.1.0
+## Category: Inventory
+## IconTexture: Interface\Icons\INV_Misc_Bag_08
 ## SavedVariablesPerCharacter: CombinedBagOrderDB
 ## OptionalDeps: Syndicator
 
