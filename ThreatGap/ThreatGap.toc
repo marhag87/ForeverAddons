@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Threat Gap
+## Notes: Threat on enemy nameplates: a colored strip on every mob and your exact threat lead or room on your target. Tank and non-tank views.
+## Version: 1.0.0
+## Category: Combat
+## SavedVariablesPerCharacter: ThreatGapCharDB
+
+ThreatGap.lua
