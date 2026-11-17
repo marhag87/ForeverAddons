@@ -1,0 +1,17 @@
+## Interface: 120007,120100,16001
+## Title: GatherReference
+## Notes: Shows Wowhead gathering node data (herbs, ore, treasure) on the world map and minimap
+## Author: Marrtin
+## Version: 1.0.0
+## SavedVariables: GatherReferenceDB
+## OptionalDeps: GatherMate2
+## IconTexture: Interface\Icons\Trade_Herbalism
+## Category: Map
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\HereBeDragons\HereBeDragons-2.0.lua
+
+Nodes.lua
+GatherReference.lua
+GatherReference.xml
