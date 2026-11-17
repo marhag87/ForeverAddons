@@ -1,0 +1,21 @@
+## Interface: 16001
+## Title: Available Quests Map
+## Notes: Shows a ! on the world map where you can pick up quests, and lists a quest giver's quests in their tooltip. Data from QuestieDB.
+## Version: 1.0.0
+## Category: Quests
+## Dependencies: QuestieDB
+## SavedVariables: AvailableQuestsMapDB
+## IconTexture: Interface\GossipFrame\AvailableQuestIcon
+
+# Map pin libraries (copied from GatherMate2; independent of Questie)
+Libs\LibStub.lua
+Libs\CallbackHandler-1.0.lua
+Libs\HereBeDragons\HereBeDragons-2.0.lua
+Libs\HereBeDragons\HereBeDragons-Pins-2.0.lua
+
+Zones.lua
+Player.lua
+Availability.lua
+Map.lua
+Tooltip.lua
+Core.lua
