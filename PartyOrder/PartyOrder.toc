@@ -1,0 +1,7 @@
+## Interface: 16001
+## Title: Party Order
+## Notes: Rearrange the raid-style party frames. Hold Ctrl+Alt and drag a party member onto another one.
+## Version: 1.0.0
+## SavedVariables: PartyOrderDB
+
+PartyOrder.lua
