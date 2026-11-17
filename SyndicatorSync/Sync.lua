@@ -77,14 +77,14 @@ local function LooksLikeCharacter(data)
 		and type(data.bags) == "table"
 end
 
--- Tells Syndicator a character changed, the way it does after its own updates: it recounts its
--- tooltip totals and search results for that character.
+-- Tells Syndicator a copy changed, so it recounts its tooltip totals and search results for that
+-- character. Only MailCacheUpdate: Syndicator treats it as "everything this character holds may
+-- have changed", and fires it itself for characters other than the one logged in (mail sent to an
+-- alt). The other cache events are only ever fired for the logged-in character, and addons rely
+-- on that: Baganator takes BagCacheUpdate as being about your live bags, so one for a synced
+-- character swapped its bag window to that character and sorted your real bags by its layout.
 local function NotifySyndicator(key)
-	local registry = Syndicator.CallbackRegistry
-	registry:TriggerEvent("BagCacheUpdate", key, { bags = {}, bank = {}, containerBags = { bags = true, bank = true } })
-	for i = 2, #SYNDICATOR_EVENTS do
-		registry:TriggerEvent(SYNDICATOR_EVENTS[i], key)
-	end
+	Syndicator.CallbackRegistry:TriggerEvent("MailCacheUpdate", key)
 end
 
 ---------------------------------------------------------------------------------------------

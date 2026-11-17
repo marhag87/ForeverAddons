@@ -442,12 +442,15 @@ local function CreateView()
 		bagButton:LockHighlight()
 	end)
 
-	-- Picks up changes while open, such as a synced character's bank arriving or updating.
-	Syndicator.CallbackRegistry:RegisterCallback("BagCacheUpdate", function(_, key)
+	-- Picks up changes while open: BagCacheUpdate for your own character, MailCacheUpdate for a
+	-- synced character's copy arriving or updating (the only event SyndicatorSync fires for one).
+	local function OnCacheUpdate(_, key)
 		if view:IsShown() and key == view.characterKey then
 			Refresh()
 		end
-	end, view)
+	end
+	Syndicator.CallbackRegistry:RegisterCallback("BagCacheUpdate", OnCacheUpdate, view)
+	Syndicator.CallbackRegistry:RegisterCallback("MailCacheUpdate", OnCacheUpdate, view)
 	view:SetScript("OnHide", function()
 		bagButton:UnlockHighlight()
 	end)
