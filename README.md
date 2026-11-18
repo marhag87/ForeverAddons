@@ -5,6 +5,7 @@ Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is 
 | Addon | What it does |
 | --- | --- |
 | [AvailableQuestsMap](AvailableQuestsMap) | Puts a "!" on the world map wherever a quest giver has a quest you can pick up right now and lists those quests in the giver's tooltip, using QuestieDB's data. |
+| [Bobber](Bobber) | Lets you fish with the jump key: with a fishing pole in hand and standing still, it casts Fishing and then reels in the catch. Moving, swimming or in combat it jumps as usual. With Upkeep, a clickable reminder to put a lure on the pole. |
 | [CombinedBagOrder](CombinedBagOrder) | Keeps your last bag sort at the bottom of Blizzard's combined bag so new loot fills in from the top, and adds a bank button that shows any character's saved bank from Syndicator in a copy of the bank window. |
 | [GatherReference](GatherReference) | Shows Wowhead's herb, ore and treasure node locations on the world map and minimap. |
 | [PartyOrder](PartyOrder) | Reorders Blizzard's raid-style party frames when you hold Ctrl+Alt and drag one party member onto another. |
