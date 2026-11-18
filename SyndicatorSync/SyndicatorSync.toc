@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Syndicator Sync
 ## Notes: Shares Syndicator's inventory data between two paired accounts in real time, for dual-boxing.
-## Version: 1.0.1
+## Version: 1.0.2
 ## Dependencies: Syndicator
 ## IconTexture: Interface\Icons\INV_Misc_GroupNeedMore
 ## SavedVariables: SyndicatorSyncDB

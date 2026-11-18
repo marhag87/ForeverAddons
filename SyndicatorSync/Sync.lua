@@ -39,6 +39,9 @@ local asked = {} -- character key -> true once we've asked for a full copy this 
 local recheck = {} -- character key -> fingerprint of the full copy a check made us send
 local flushTimer, rosterTimer
 local pendingPair -- { norm, nonce, expires } while our pairing request waits for an answer
+-- Names this load of the UI in pings and introductions, so a ping that was sent before the
+-- partner heard from us can be told apart from one sent after the partner reloaded.
+local bootId = Util.RandomString(6)
 
 local function InitDB()
 	SyndicatorSyncDB = SyndicatorSyncDB or {}
@@ -257,8 +260,8 @@ local function SendIntro(partnerId, target, wantReply)
 	if not partner then
 		return
 	end
-	Comms.SendControl("WHISPER", target, ("I:%s:%s:%d"):format(db.accountId,
-		Proof(partner.secret, MyName(), target), wantReply and 1 or 0))
+	Comms.SendControl("WHISPER", target, ("I:%s:%s:%d:%s"):format(db.accountId,
+		Proof(partner.secret, MyName(), target), wantReply and 1 or 0, bootId))
 end
 
 local function GroupChannel()
@@ -283,7 +286,7 @@ local function Ping()
 	end
 	local channel = GroupChannel()
 	if missing and channel then
-		Comms.SendControl(channel, nil, "P:" .. db.accountId)
+		Comms.SendControl(channel, nil, "P:" .. db.accountId .. ":" .. bootId)
 	end
 end
 
@@ -505,20 +508,26 @@ local control = {}
 
 -- A ping: some partner account is looking for us.
 function control.P(sender, _, body)
-	local partnerId = body:match("^(%w+)$")
+	local partnerId, boot = body:match("^(%w+):?(%w*)$")
 	if not partnerId or partnerId == db.accountId or not db.partners[partnerId] then
 		return
 	end
 	local norm = Util.Norm(sender)
 	local peer = peers[partnerId]
-	if peer and peer.norm == norm then
-		EndSession(partnerId) -- our peer lost its session (a reload, say): start over
+	local samePeer = peer and peer.norm == norm
+	-- Both sides ping at login, and messages arrive out of order, so a ping can come from the
+	-- very load we already have a session with, sent before it heard from us. The session
+	-- stands; an introduction without a reply wanted lets their side start it too, in case
+	-- ours went missing.
+	local crossed = samePeer and boot ~= "" and boot == peer.boot
+	if samePeer and not crossed then
+		EndSession(partnerId) -- a new load of their UI (a reload, say): start over
 	end
 	if lastIntro[norm] and GetTime() - lastIntro[norm] < INTRO_COOLDOWN then
 		return
 	end
 	lastIntro[norm] = GetTime()
-	SendIntro(partnerId, sender, true)
+	SendIntro(partnerId, sender, not crossed)
 end
 
 -- An introduction: the sender proves it's on a paired account, and may ask us to do the same.
@@ -526,7 +535,7 @@ function control.I(sender, channel, body)
 	if channel ~= "WHISPER" then
 		return
 	end
-	local partnerId, proof, wantReply = body:match("^(%w+):([%d%.]+):(%d)$")
+	local partnerId, proof, wantReply, boot = body:match("^(%w+):([%d%.]+):(%d):?(%w*)$")
 	local partner = partnerId and db.partners[partnerId]
 	if not partner then
 		return
@@ -539,6 +548,7 @@ function control.I(sender, channel, body)
 	if wantReply == "1" or not (peer and peer.norm == Util.Norm(sender)) then
 		StartSession(partnerId, sender)
 	end
+	peers[partnerId].boot = boot -- which load of their UI this session is with
 	if wantReply == "1" then
 		SendIntro(partnerId, sender, false)
 	end
