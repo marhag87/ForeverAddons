@@ -540,11 +540,16 @@ local function ApiButton(i)
   b:SetHighlightTexture("Interface/Buttons/ButtonHilight-Square", "ADD")
   b:SetScript("OnEnter", function(self)
     local r = self.id and apiReminders[self.id]
-    if r and r.tooltip then
-      GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    if not (r and (r.item or r.spell or r.tooltip)) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    if r.item then
+      GameTooltip:SetItemByID(r.item)
+    elseif r.spell then
+      GameTooltip:SetSpellByID(r.spell)
+    else
       GameTooltip:SetText(r.tooltip, 1, 1, 1, 1, true)
-      GameTooltip:Show()
     end
+    GameTooltip:Show()
   end)
   b:SetScript("OnLeave", function()
     GameTooltip:Hide()
@@ -641,7 +646,9 @@ end
 -- info.icon:    texture path or file id.
 -- info.click:   secure action attributes for a click, e.g. { type = "spell", spell = 71 }
 --               or { type = "focus", unit = "party1" }. Without it a click does nothing.
--- info.tooltip: text shown on mouseover.
+-- info.item:    an item id; mouseover shows that item's own tooltip.
+-- info.spell:   a spell id; mouseover shows that spell's own tooltip.
+-- info.tooltip: text shown on mouseover, when neither item nor spell is given.
 -- info.glow:    false to stay unlit in combat.
 Upkeep = Upkeep or {}
 
@@ -662,6 +669,8 @@ function Upkeep.AddReminder(id, info)
   end
   r.icon = info.icon or "Interface/Icons/INV_Misc_QuestionMark"
   r.click, r.tooltip, r.glow, r.removed = click, info.tooltip, info.glow ~= false, nil
+  r.item = tonumber(info.item)
+  r.spell = tonumber(info.spell)
   LayoutApi()
 end
 
@@ -779,6 +788,19 @@ local function HasWeapon(slot)
     return select(6, getInfo(id)) == ITEM_CLASS_WEAPON
   end)
   return ok and isWeapon
+end
+
+local FISHING_POLE = Enum and Enum.ItemWeaponSubclass and Enum.ItemWeaponSubclass.Fishingpole or 20
+
+local function HoldingFishingPole()
+  local ok, isPole = pcall(function()
+    local id = GetInventoryItemID("player", 16)
+    if isSecret(id) or id == nil then return false end
+    local getInfo = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    local _, _, _, _, _, classID, subclassID = getInfo(id)
+    return classID == ITEM_CLASS_WEAPON and subclassID == FISHING_POLE
+  end)
+  return ok and isPole
 end
 
 local function Roman(numeral)
@@ -907,7 +929,8 @@ local function WeaponReminders(out)
   if not available then return end
   local now = GetTime()
   for _, slot in ipairs(WEAPON_SLOTS) do
-    if HasWeapon(slot) then
+    -- A fishing pole wants a lure, not your class's enchant.
+    if HasWeapon(slot) and not (slot == 16 and HoldingFishingPole()) then
       ReadWeapon(slot)
       local st = weaponState[slot]
       -- Nothing read yet means absence is unproven.
