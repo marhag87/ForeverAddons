@@ -3,10 +3,12 @@
 -- reels the catch in. Moving, swimming, falling, mounted, dead or in combat, it jumps as
 -- usual.
 --
--- Two game settings make the second press work, so they're switched on while a pole is in
--- your hand and put back when it isn't, and when you log out:
+-- A few game settings make this work, so they're switched on while a pole is in your hand
+-- and put back when it isn't, and when you log out:
 --   * soft targeting for the interact key, from the keyboard, far and wide enough to pick
 --     the bobber up;
+--   * the interact icon over the object it picks, so your own bobber is marked among
+--     everyone else's;
 --   * auto loot, so the catch goes straight into your bags.
 --
 -- The key changes with override bindings, which can't change in combat. A secure state
@@ -45,6 +47,11 @@ local SETTINGS = {
 	SoftTargetInteractRange = function(value)
 		if (tonumber(value) or 0) < 30 then
 			return "30"
+		end
+	end,
+	SoftTargetIconGameObject = function(value)
+		if value ~= "1" then
+			return "1"
 		end
 	end,
 	autoLootDefault = function(value)
