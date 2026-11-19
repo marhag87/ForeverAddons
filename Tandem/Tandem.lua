@@ -13,11 +13,14 @@ local REMINDER_FOCUS = "Tandem.focus"
 local REMINDER_LOGIN = "Tandem.login"
 local INVITE_DELAY = 1.5 -- seconds after a member turns up before inviting them
 local RELOAD_HOLD = 20 -- seconds a muted follower stays muted after a reload while members find each other again
+local LOGIN_SETTLE = 10 -- seconds after logging in before the stance or form shown can be trusted
 local SOUND_CVAR = "Sound_EnableAllSound"
 
 local db, chardb
 local loaded = false
 local holdUntil -- GetTime() until which a reload keeps the sound off
+local settleUntil -- GetTime() until which the stance shown may still be the one you logged out in
+local sentCasts = {} -- castGUID -> GetTime() for casts you sent yourself
 local lootDoneFor -- the group, as sorted names, we last set free-for-all for
 local lootWaiting = false -- free-for-all is waiting for combat to end
 local acceptedInvite = false -- we accepted an invite and the popup still needs closing
@@ -143,8 +146,12 @@ end
 
 local function UpdateLoginSpell()
 	local spell = chardb.loginSpell
-	if spell and chardb.loginPending and InLoginForm(spell) then
+	-- Right after logging in, the game can show the stance you logged out in for a moment
+	-- before it puts you in Battle Stance, so that isn't trusted yet.
+	local settled = not (settleUntil and GetTime() < settleUntil)
+	if spell and chardb.loginPending and settled and InLoginForm(spell) then
 		chardb.loginPending = false
+		Util.Debug("login spell done: already in " .. spell.name)
 	end
 	if spell and chardb.loginPending and not Paused() then
 		ShowReminder(REMINDER_LOGIN, {
@@ -459,6 +466,7 @@ events:RegisterEvent("UNIT_CONNECTION")
 events:RegisterEvent("PLAYER_FOCUS_CHANGED")
 events:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
+events:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 
 local function OnFirstWorld(isInitialLogin, isReloadingUi)
@@ -472,6 +480,8 @@ local function OnFirstWorld(isInitialLogin, isReloadingUi)
 	db.heldMute = nil
 	if isInitialLogin then
 		chardb.loginPending = chardb.loginSpell ~= nil
+		settleUntil = GetTime() + LOGIN_SETTLE
+		C_Timer.After(LOGIN_SETTLE + 0.5, ns.Changed)
 	end
 	loaded = true
 	Sets.Start()
@@ -509,11 +519,31 @@ events:SetScript("OnEvent", function(_, event, ...)
 				Sets.OnGone(name)
 			end
 		end
+	elseif event == "UNIT_SPELLCAST_SENT" then
+		-- unit, target, castGUID, spellID. Casts that never land leave an entry behind.
+		local _, _, castGUID = ...
+		if Util.IsHidden(castGUID) or not castGUID then
+			return
+		end
+		local now = GetTime()
+		for guid, sent in pairs(sentCasts) do
+			if now - sent > 30 then
+				sentCasts[guid] = nil
+			end
+		end
+		sentCasts[castGUID] = now
 	elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-		local _, _, spellID = ...
+		-- unit, castGUID, spellID. Only a cast you sent counts, not one the game makes for you,
+		-- such as putting you back in a stance as you log in.
+		local _, castGUID, spellID = ...
+		if Util.IsHidden(castGUID) or not (castGUID and sentCasts[castGUID]) then
+			return
+		end
+		sentCasts[castGUID] = nil
 		local spell = chardb.loginSpell
 		if spell and chardb.loginPending and SpellMatches(spellID, spell) then
 			chardb.loginPending = false
+			Util.Debug("login spell done: you cast " .. spell.name)
 			ns.Changed()
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
