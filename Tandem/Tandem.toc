@@ -2,7 +2,7 @@
 ## Title: Tandem
 ## Notes: Dual-boxing helper. Sets of your characters on different accounts find each other at login, group up, switch to free-for-all loot and turn the sound off on all but the main. With Upkeep, clickable reminders to focus the main and to cast a login spell such as a stance.
 ## Author: Martin
-## Version: 1.0.1
+## Version: 1.0.2
 ## IconTexture: Interface\Icons\Achievement_GuildPerk_HaveGroup WillTravel
 ## OptionalDeps: Upkeep
 ## SavedVariables: TandemDB

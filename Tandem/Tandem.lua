@@ -157,7 +157,7 @@ local function UpdateLoginSpell()
 		ShowReminder(REMINDER_LOGIN, {
 			icon = C_Spell.GetSpellTexture(spell.id) or "Interface/Icons/INV_Misc_QuestionMark",
 			click = { type = "spell", spell = spell.id },
-			tooltip = "Cast " .. spell.name,
+			spell = spell.id, -- mouseover shows the spell's own tooltip
 		}, tostring(spell.id))
 	else
 		HideReminder(REMINDER_LOGIN)
