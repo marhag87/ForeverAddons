@@ -24,12 +24,16 @@ local isPaladin = class == "PALADIN"
 -- its ranks as spell ids, lowest first, so a position is a rank; a lower rank than you
 -- know counts as missing. An entry only reminds you once you know one of its spells.
 -- duration, in seconds, times a cast in combat until the buff has been seen on you.
+-- clickable puts the reminder in the clickable row, as a button that casts the spell and
+-- shows its tooltip. Only for buffs that can wait out a fight: that row can't change in
+-- combat.
 local SELF_BUFFS = {
   ALL = {
     -- One tracking at a time, so with both professions either one satisfies it.
     {
       { 2580 },  -- Find Minerals, known once you have trained Mining
       { 2383 },  -- Find Herbs, known once you have trained Herbalism
+      clickable = true,
     },
   },
   SHAMAN = {
@@ -1033,11 +1037,27 @@ local function ReadSelfBuffs()
 end
 
 -- Adds the icon of every entry that is missing or outranked to out, in table order.
+-- A clickable entry's button: shown with the spell to cast while pick is set, else removed.
+local clickableShown = {}  -- entry -> spell id its button casts, while it's up
+
+local function ShowClickable(e, i, pick)
+  local id = pick and e.spells[pick][e.known[pick]]
+  if clickableShown[e] == id then return end
+  clickableShown[e] = id
+  local key = "Upkeep.selfbuff" .. i
+  if id then
+    Upkeep.AddReminder(key, { icon = e.icons[pick], click = { type = "spell", spell = id }, spell = id })
+  else
+    Upkeep.RemoveReminder(key)
+  end
+end
+
 local function SelfBuffReminders(out)
   ReadSelfBuffs()
   local now = GetTime()
-  for _, e in ipairs(selfBuffs) do
+  for i, e in ipairs(selfBuffs) do
     local st = e.state
+    local pick  -- the spell to remind you of, by position in the set; nil if nothing is missing
     -- Nothing known means nothing to cast; nothing read yet means absence is unproven.
     if next(e.known) and st ~= nil then
       if st and st.exp and st.exp > 0 and st.exp <= now then st = false end
@@ -1048,7 +1068,7 @@ local function SelfBuffReminders(out)
       if not st or outranked then
         -- The outranked spell, else the one from the set you last had up, else the
         -- first one you know.
-        local pick = outranked and st.spell or (e.known[e.last] and e.last)
+        pick = outranked and st.spell or (e.known[e.last] and e.last)
         if not pick then
           for sp = 1, #e.spells do
             if e.known[sp] then
@@ -1057,8 +1077,12 @@ local function SelfBuffReminders(out)
             end
           end
         end
-        out[#out + 1] = e.icons[pick]
       end
+    end
+    if e.spells.clickable then
+      ShowClickable(e, i, pick)
+    elseif pick then
+      out[#out + 1] = e.icons[pick]
     end
   end
 end

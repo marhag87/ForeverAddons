@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: Upkeep
-## Notes: Duration bar for your Paladin seal, a reminder when none of your own blessings is on you, and the blessings you could still cast on your target. Also reminds you of a missing weapon enchant or self buff for your class, and of Find Minerals or Find Herbs if you know Mining or Herbalism. Other addons can add clickable reminders of their own.
+## Notes: Duration bar for your Paladin seal, a reminder when none of your own blessings is on you, and the blessings you could still cast on your target. Also reminds you of a missing weapon enchant or self buff for your class, and of Find Minerals or Find Herbs if you know Mining or Herbalism (a click casts it). Other addons can add clickable reminders of their own.
 ## Author: Martin
-## Version: 2.10
+## Version: 2.11
 ## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
 
 Upkeep.lua
