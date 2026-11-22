@@ -1,0 +1,6 @@
+<!-- Key bindings: the game's Keybindings > TrinketQueue. Each clicks a trinket slot, with a button
+     name of its own so a binding with a modifier still uses the trinket (TrinketQueue.lua). -->
+<Bindings>
+	<Binding name="CLICK TrinketQueueSlot13:Keybind" category="TrinketQueue"/>
+	<Binding name="CLICK TrinketQueueSlot14:Keybind" category="TrinketQueue"/>
+</Bindings>
