@@ -16,6 +16,9 @@ local _, ns = ...
 local Link = ns.Link
 
 local REMINDER = "TalentPath.next"
+
+-- Extra points to pretend you have, from /talentpath preview, to see the marks without a level.
+ns.previewPoints = 0
 local playerClass = select(2, UnitClass("player")):lower()
 
 local chardb -- TalentPathCharDB: { links = { [spec group] = link } }
@@ -166,19 +169,31 @@ local function Evaluate()
 	end
 
 	local picks = {}
-	for s = spent + 1, math.min(spent + talents.unspent, #build.steps) do
+	for s = spent + 1, math.min(spent + talents.unspent + ns.previewPoints, #build.steps) do
 		local step = build.steps[s]
 		local node = talents.trees[step.tree][step.index]
 		local spellID, name, icon = TalentSpell(talents.configID, node)
 		picks[#picks + 1] = { node = node, rank = step.rank, spellID = spellID, name = name, icon = icon }
 	end
-	return { status = "on", picks = picks, talents = talents }
+	-- Every talent the rest of the build still puts points in.
+	local later, seen = {}, {}
+	for s = spent + 1, #build.steps do
+		local step = build.steps[s]
+		local node = talents.trees[step.tree][step.index]
+		if not seen[node] then
+			seen[node] = true
+			later[#later + 1] = node
+		end
+	end
+	return { status = "on", picks = picks, later = later, talents = talents }
 end
 
 ---------------------------------------------------------------------------------------------
--- In the talent window: a glow and a number on each of the next talents, or a warning. These
--- are frames of our own laid over Blizzard's; its buttons are never touched, since the talent
--- window is easily upset by addons.
+-- In the talent window: a yellow glow on the talent your next point goes in, a blue one on
+-- every other talent the build still takes, or a warning. These are frames of our own laid over
+-- Blizzard's; its buttons are never touched, since the talent window is easily upset by addons.
+
+local LATER_COLOR = { 0.3, 0.7, 1 }
 
 local talentsFrame
 local marks = {}
@@ -190,13 +205,17 @@ local function Mark(i)
 		return mark
 	end
 	mark = CreateFrame("Frame", nil, talentsFrame)
-	mark.glow = mark:CreateTexture(nil, "OVERLAY")
-	mark.glow:SetTexture("Interface/SpellActivationOverlay/IconAlert")
-	mark.glow:SetTexCoord(0.00781250, 0.50781250, 0.27734375, 0.52734375)
-	mark.glow:SetBlendMode("ADD")
-	mark.glow:SetAllPoints()
-	mark.number = mark:CreateFontString(nil, "OVERLAY", "NumberFontNormalLarge")
-	mark.number:SetTextColor(1, 0.82, 0)
+	mark.next = mark:CreateTexture(nil, "OVERLAY")
+	mark.next:SetTexture("Interface/SpellActivationOverlay/IconAlert")
+	mark.next:SetTexCoord(0.00781250, 0.50781250, 0.27734375, 0.52734375)
+	mark.next:SetBlendMode("ADD")
+	mark.next:SetAllPoints()
+	-- A white border glow, tinted.
+	mark.later = mark:CreateTexture(nil, "OVERLAY")
+	mark.later:SetTexture("Interface/Buttons/UI-ActionButton-Border")
+	mark.later:SetBlendMode("ADD")
+	mark.later:SetVertexColor(LATER_COLOR[1], LATER_COLOR[2], LATER_COLOR[3])
+	mark.later:SetPoint("CENTER")
 	marks[i] = mark
 	return mark
 end
@@ -232,27 +251,24 @@ local function ShowInTalentWindow(state)
 	if state.status ~= "on" then
 		return
 	end
-	-- One mark per talent; a talent taking several of the next points shows each number.
-	local numbersFor, order = {}, {}
-	for i, pick in ipairs(state.picks) do
-		if not numbersFor[pick.node.ID] then
-			numbersFor[pick.node.ID] = {}
-			order[#order + 1] = pick.node.ID
-		end
-		table.insert(numbersFor[pick.node.ID], i)
+	-- Only while you have a point to spend.
+	local nextNode = state.picks[1] and state.picks[1].node
+	if not nextNode then
+		return
 	end
-	for i, nodeID in ipairs(order) do
-		local button = talentsFrame:GetTalentButtonByNodeID(nodeID)
+	for i, node in ipairs(state.later) do
+		local button = talentsFrame:GetTalentButtonByNodeID(node.ID)
 		if button and button:IsShown() then
 			local mark = Mark(i)
-			local size = button:GetWidth() * 1.5
-			mark:SetSize(size, size)
+			local width = button:GetWidth()
+			mark:SetSize(width * 1.5, width * 1.5)
 			mark:ClearAllPoints()
 			mark:SetPoint("CENTER", button, "CENTER")
 			mark:SetFrameLevel(button:GetFrameLevel() + 10)
-			mark.number:ClearAllPoints()
-			mark.number:SetPoint("TOPLEFT", button, "TOPLEFT", -4, 6)
-			mark.number:SetText(table.concat(numbersFor[nodeID], ","))
+			local isNext = node.ID == nextNode.ID
+			mark.next:SetShown(isNext)
+			mark.later:SetShown(not isNext)
+			mark.later:SetSize(width * 1.8, width * 1.8)
 			mark:Show()
 		end
 	end
@@ -421,11 +437,22 @@ end
 
 SLASH_TALENTPATH1 = "/talentpath"
 SlashCmdList.TALENTPATH = function(msg)
-	local command = strtrim(msg or ""):lower()
+	local command, arg = strtrim(msg or ""):lower():match("^(%S*)%s*(.-)$")
 	if command == "order" then
 		PrintOrder()
+	elseif command == "preview" then
+		-- Not saved: a reload ends it.
+		ns.previewPoints = math.max(0, math.min(tonumber(arg) or 0, 51))
+		soon = true
+		if ns.previewPoints > 0 then
+			Print(("showing the next talents as if you had %d more point%s. /talentpath preview 0 stops it.")
+				:format(ns.previewPoints, ns.previewPoints == 1 and "" or "s"))
+		else
+			Print("preview off.")
+		end
 	else
-		Print("paste a Wowhead talent link in the box under the talent window. /talentpath order lists the build.")
+		Print("paste a Wowhead talent link in the box under the talent window. /talentpath order lists the "
+			.. "build; /talentpath preview <points> shows the marks as if you had that many more points.")
 	end
 end
 
