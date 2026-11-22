@@ -263,6 +263,12 @@ local function NewSlot(invSlot, i)
   b.cooldown:SetAllPoints()
   b.emptyTexture = EmptySlotTexture(invSlot)
 
+  -- Its key binding in the top right corner, as on an action button (UpdateHotkeys).
+  b.binding = "CLICK TrinketQueueSlot" .. invSlot .. ":Keybind"
+  b.hotkey = b:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmallGray")
+  b.hotkey:SetJustifyH("RIGHT")
+  b.hotkey:Hide()
+
   -- The character sheet's frame round the slot, under it.
   local border = CreateFrame("Frame", nil, holder)
   border:SetFrameLevel(level + 2)
@@ -288,10 +294,10 @@ local function NewSlot(invSlot, i)
   arrow:SetScript("OnDragStop", StopMove)
   b.arrow = arrow
 
-  -- The trinket waiting to go on, in the slot's corner.
+  -- The trinket waiting to go on, in the slot's top left corner (the key binding has the right).
   local waiting = CreateFrame("Frame", nil, b)
   waiting:SetSize(18, 18)
-  waiting:SetPoint("TOPRIGHT", b, "TOPRIGHT", 5, 5)
+  waiting:SetPoint("TOPLEFT", b, "TOPLEFT", -5, 5)
   waiting:SetFrameLevel(b:GetFrameLevel() + 5)
   local edge = waiting:CreateTexture(nil, "BACKGROUND")
   edge:SetColorTexture(0, 0, 0, 1)
@@ -342,6 +348,31 @@ end
 UpdateSlots = function()
   for _, invSlot in ipairs(SLOTS) do UpdateSlot(slotButtons[invSlot]) end
   UpdateShown()
+end
+
+-- The keys bound to the slots, shortened as action buttons have them (ActionButton.lua's
+-- UpdateHotkeys): tucked inside the border for a keyboard key, the full width for a gamepad's.
+local function UpdateHotkeys()
+  for _, b in pairs(slotButtons) do
+    local key = GetBindingKey(b.binding)
+    local text = key and GetBindingText(key, 1) or ""
+    local hotkey = b.hotkey
+    if text == "" then
+      hotkey:Hide()
+    else
+      local width = b:GetWidth()
+      hotkey:ClearAllPoints()
+      if IsBindingForGamePad and IsBindingForGamePad(key) then
+        hotkey:SetSize(width, 16)
+        hotkey:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+      else
+        hotkey:SetSize(width - 6, 10)
+        hotkey:SetPoint("TOPRIGHT", b, "TOPRIGHT", -2, -3)
+      end
+      hotkey:SetText(text)
+      hotkey:Show()
+    end
+  end
 end
 
 --------------------------------------------------------------------------------
@@ -603,7 +634,12 @@ events:RegisterEvent("BAG_UPDATE_DELAYED")
 events:RegisterEvent("BAG_UPDATE_COOLDOWN")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
+events:RegisterEvent("UPDATE_BINDINGS")
 events:SetScript("OnEvent", function(_, event, arg1)
+  if event == "UPDATE_BINDINGS" or event == "PLAYER_LOGIN" then
+    UpdateHotkeys()
+    if event == "UPDATE_BINDINGS" then return end
+  end
   if event == "ADDON_LOADED" then
     if arg1 == "TrinketQueue" then
       TrinketQueueDB = TrinketQueueDB or {}
