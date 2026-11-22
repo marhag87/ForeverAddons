@@ -1204,7 +1204,8 @@ end
 --------------------------------------------------------------------------------
 -- Experience bonuses, below the level cap:
 --   * Food that adds experience: with some in your bags and not Well Fed with an
---     experience bonus, a reminder offers the best of it; a click starts eating.
+--     experience bonus, a reminder offers the best of it; a click starts eating. Food
+--     that raises Fishing skill is left for fishing.
 --   * A Cozy Sleeping Bag: with one in your bags and off cooldown, a reminder offers it
 --     while you're not fully Well-Rested - under three stacks, each a minute's rest - or
 --     have less than ten minutes of it left, when a minute's rest tops it up instead of
@@ -1215,6 +1216,7 @@ end
 --------------------------------------------------------------------------------
 
 local XP_TEXT = "xperience"  -- "Experience ..." or "... experience gained from kills ..."
+local FISHING_FOOD_TEXT = "Fishing Skill"  -- food such as Filet of Redgill, kept for fishing
 local FOOD_BUFF = "Well Fed"
 local SLEEPING_BAG = "Cozy Sleeping Bag"
 local BAG_BUFF = "Well-Rested"
@@ -1271,7 +1273,8 @@ local function SeedXP()
           else
             local ok, data = pcall(C_TooltipInfo.GetBagItem, bag, slot)
             if ok and data and data.lines and #data.lines > 1 then
-              xpFoodOf[id] = TooltipSays(data, XP_TEXT)
+              -- Fishing food is kept for fishing, whatever else it gives.
+              xpFoodOf[id] = TooltipSays(data, XP_TEXT) and not TooltipSays(data, FISHING_FOOD_TEXT)
             else
               loading = true
             end
