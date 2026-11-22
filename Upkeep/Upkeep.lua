@@ -1294,12 +1294,13 @@ local XP_CHECK = 1           -- seconds between looks at your buffs
 local XP_RETRIES = 5         -- times to look again for items still loading
 local ITEM_CLASS_CONSUMABLE = Enum and Enum.ItemClass and Enum.ItemClass.Consumable or 0
 
-local xpFoodOf = {}  -- item id -> true if its tooltip promises experience, false if not
-local xpFoods = {}   -- item ids of such food in your bags
-local sleepingBag    -- item id of a sleeping bag in your bags
+local xpFoodOf = {}     -- item id -> true if its text promises experience, false if not
+local xpFoods = {}      -- item ids of such food in your bags
+local consumables = {}  -- item ids of every consumable in your bags, for /upkeep debug
+local sleepingBag       -- item id of a sleeping bag in your bags
 local xpCheckAt = 0
 local foodEntry, bagEntry  -- the reminders while they're wanted
-local xpRetries = 0
+local xpRetries, xpRetryPending = 0, false
 
 local function TooltipSays(data, text)
   for _, line in ipairs(data.lines) do
@@ -1309,6 +1310,30 @@ local function TooltipSays(data, text)
   return false
 end
 
+-- Whether a consumable's text has loaded, and its use spell's description. Item and
+-- spell data load in the background, and until they have, the tooltip has no "Use:"
+-- line: it would look like food without an experience bonus. Asks for whatever is
+-- missing; false means look again later.
+local function UseText(id)
+  if C_Item.IsItemDataCachedByID and not C_Item.IsItemDataCachedByID(id) then
+    if C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id) end
+    return false
+  end
+  local getSpell = C_Item.GetItemSpell or GetItemSpell
+  local spell = getSpell and select(2, getSpell(id))
+  if type(spell) ~= "number" or isSecret(spell) or not C_Spell then return true end
+  local cached = C_Spell.IsSpellDataCached
+  if cached and not cached(spell) then
+    if C_Spell.RequestLoadSpellData then C_Spell.RequestLoadSpellData(spell) end
+    return false
+  end
+  local desc = C_Spell.GetSpellDescription and C_Spell.GetSpellDescription(spell)
+  if isSecret(desc) or type(desc) ~= "string" then return true end
+  -- Without a way to ask, an empty description is taken to be still loading.
+  if desc == "" and not cached then return false end
+  return true, desc
+end
+
 local function MaxLevel()
   local ok, cap = pcall(GetMaxLevelForPlayerExpansion)
   if ok and type(cap) == "number" and cap > 0 then return cap end
@@ -1316,12 +1341,14 @@ local function MaxLevel()
 end
 
 -- Looks through your bags for experience food and a sleeping bag. Each kind of consumable
--- is asked about once its tooltip has loaded; anything still loading is asked again a
--- little later.
-local function SeedXP()
+-- is asked about once its text has loaded; anything still loading is asked again a
+-- little later. retry is true for those later looks.
+local function SeedXP(retry)
   wipe(xpFoods)
+  wipe(consumables)
   sleepingBag = nil
   if not (C_Container and C_TooltipInfo and C_TooltipInfo.GetBagItem) then return end
+  if not retry then xpRetries = 0 end
   local getInfo = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
   local seen, loading = {}, false
   for bag = 0, tonumber(NUM_BAG_SLOTS) or 4 do
@@ -1335,28 +1362,33 @@ local function SeedXP()
         elseif name == nil then
           loading = true
         end
-        if xpFoodOf[id] == nil then
-          if select(6, getInfo(id)) ~= ITEM_CLASS_CONSUMABLE then
-            xpFoodOf[id] = false
-          else
+        if select(6, getInfo(id)) == ITEM_CLASS_CONSUMABLE then
+          consumables[#consumables + 1] = id
+          if xpFoodOf[id] == nil then
+            local ready, desc = UseText(id)
             local ok, data = pcall(C_TooltipInfo.GetBagItem, bag, slot)
-            if ok and data and data.lines and #data.lines > 1 then
+            if ready and ok and data and data.lines and #data.lines > 1 then
+              local function Says(text)
+                return TooltipSays(data, text) or (desc ~= nil and desc:find(text, 1, true) ~= nil)
+              end
               -- Fishing food is kept for fishing, whatever else it gives.
-              xpFoodOf[id] = TooltipSays(data, XP_TEXT) and not TooltipSays(data, FISHING_FOOD_TEXT)
+              xpFoodOf[id] = Says(XP_TEXT) and not Says(FISHING_FOOD_TEXT)
             else
               loading = true
             end
           end
+          if xpFoodOf[id] then xpFoods[#xpFoods + 1] = id end
         end
-        if xpFoodOf[id] then xpFoods[#xpFoods + 1] = id end
       end
     end
   end
-  if loading and xpRetries < XP_RETRIES then
+  if loading and xpRetries < XP_RETRIES and not xpRetryPending then
     xpRetries = xpRetries + 1
-    C_Timer.After(3, SeedXP)
-  elseif not loading then
-    xpRetries = 0
+    xpRetryPending = true
+    C_Timer.After(3, function()
+      xpRetryPending = false
+      SeedXP(true)
+    end)
   end
 end
 
@@ -1685,10 +1717,16 @@ local function Debug()
       tostring(st and st.rank),
       st and st.exp and string.format("%.0fs", st.exp - GetTime()) or "nil"))
   end
-  local foods = {}
+  local foods, read = {}, {}
   for _, id in ipairs(xpFoods) do
     foods[#foods + 1] = (C_Item.GetItemNameByID(id) or id) .. (C_Item.IsUsableItem(id) and "" or " (not usable)")
   end
+  for _, id in ipairs(consumables) do
+    local verdict = xpFoodOf[id]
+    read[#read + 1] = string.format("%s %s", C_Item.GetItemNameByID(id) or id,
+      verdict == nil and "(not read yet)" or verdict and "(experience)" or "(no)")
+  end
+  print("Upkeep: consumables in your bags: " .. (#read > 0 and table.concat(read, ", ") or "none"))
   local xpBuffs = {}
   local names, trusted = XPBuffs(xpBuffs)
   print(string.format("Upkeep: level %s of %s, experience food: %s, sleeping bag: %s, buffs mentioning "
