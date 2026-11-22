@@ -2,10 +2,11 @@
 -- blessings is on you, and the blessings you could still cast on your target. The same
 -- reminder covers weapon enchants (Shaman imbues, Rogue poisons) and buffs a class keeps
 -- on itself, listed per class in WEAPON_ENCHANTS and SELF_BUFFS below, and buffs any
--- class keeps up, such as a gatherer's Find Minerals or Find Herbs. Every reminder is a
--- button that casts what's missing and shows its tooltip, except that one coming up in
--- combat is a plain icon until the fight ends (see "Reminder icons" below). Other addons
--- can add reminders of their own with Upkeep.AddReminder.
+-- class keeps up, such as a gatherer's Find Minerals or Find Herbs, and below the level cap
+-- experience food and a sleeping bag. Every reminder is a button that casts what's missing and
+-- shows its tooltip, except that one coming up in combat is a plain icon until the fight
+-- ends (see "Reminder icons" below). Other addons can add reminders of their own with
+-- Upkeep.AddReminder.
 --
 -- This client restricts addons the way retail does. Established by testing in game:
 --   * Enumerating the spellbook and reading the combat log are forbidden outright, and
@@ -25,6 +26,8 @@ local isPaladin = class == "PALADIN"
 -- its ranks as spell ids, lowest first, so a position is a rank; a lower rank than you
 -- know counts as missing. An entry only reminds you once you know one of its spells.
 -- duration, in seconds, times a cast in combat until the buff has been seen on you.
+-- early, in seconds, reminds you that long before the buff runs out, so you can refresh it
+-- in time; without it the reminder waits until the buff is gone.
 local SELF_BUFFS = {
   ALL = {
     -- One tracking at a time, so with both professions either one satisfies it.
@@ -53,8 +56,10 @@ local SELF_BUFFS = {
 -- Poison II"). You can apply an option if you know one of its spells, or carry one of
 -- its items (poisons); either list holds every rank, lowest first, so a position is a
 -- rank. Each equipped weapon is checked on its own, so dual wielding gets an icon each.
+-- early, in seconds, works as for SELF_BUFFS and covers all of a class's enchants.
 local WEAPON_ENCHANTS = {
   SHAMAN = {
+    early = 5 * 60,
     { tooltip = "Rockbiter", spells = { 8017, 8018, 8019, 10399, 16314, 16315, 16316 } },
     { tooltip = "Flametongue", spells = { 8024, 8027, 8030, 16339, 16341, 16342 } },
     { tooltip = "Frostbrand", spells = { 8033, 8038, 10456, 16355, 16356 } },
@@ -1052,17 +1057,23 @@ local function WeaponReminders(out)
         -- A lower rank than you can apply counts as missing; an unknown rank does not.
         local opt = st and st.option and weaponOptions[st.option]
         local outranked = opt and st.rank and opt.best and opt.best > st.rank
-        if not st or outranked then
-          -- The outranked option, else the one last on this weapon, else the one last
-          -- cast, else the first you can apply.
-          local pick = outranked and st.option or nil
+        -- So does one running out within the class's early warning.
+        local early = weaponOptions.early
+        local endingSoon = st and st.exp and early and st.exp - now <= early
+        if not st or outranked or endingSoon then
+          -- The outranked or ending option when you can apply it, else the one last on
+          -- this weapon, else the one last cast, else the first you can apply.
+          local pick = (outranked or (endingSoon and opt and opt.best)) and st.option or nil
           local seen = weaponLast[slot]
           if not pick and seen and weaponOptions[seen].best then pick = seen end
           if not pick and lastWeaponOption and weaponOptions[lastWeaponOption].best then
             pick = lastWeaponOption
           end
           pick = pick or available
-          out[#out + 1] = WeaponEntry(slot, weaponOptions[pick])
+          local entry = WeaponEntry(slot, weaponOptions[pick])
+          -- An early warning for one still up doesn't glow; only a gap does.
+          entry.glow = not st or outranked or false
+          out[#out + 1] = entry
         end
       end
     end
@@ -1153,6 +1164,7 @@ local function SelfBuffReminders(out)
   for i, e in ipairs(selfBuffs) do
     local st = e.state
     local pick  -- the spell to remind you of, by position in the set; nil if nothing is missing
+    local gap = false  -- missing or outranked, rather than just ending soon
     -- Nothing known means nothing to cast; nothing read yet means absence is unproven.
     if next(e.known) and st ~= nil then
       if st and st.exp and st.exp > 0 and st.exp <= now then st = false end
@@ -1160,10 +1172,14 @@ local function SelfBuffReminders(out)
       -- that cannot be read does not, so it never nags without reason.
       local best = st and e.known[st.spell]
       local outranked = st and st.rank and best and best > st.rank
-      if not st or outranked then
-        -- The outranked spell, else the one from the set you last had up, else the
-        -- first one you know.
-        pick = outranked and st.spell or (e.known[e.last] and e.last)
+      -- So does one running out within the entry's early warning.
+      local early = e.spells.early
+      local endingSoon = st and st.exp and st.exp > 0 and early and st.exp - now <= early
+      if not st or outranked or endingSoon then
+        gap = not st or outranked or false
+        -- The outranked or ending spell when you know it, else the one from the set you
+        -- last had up, else the first one you know.
+        pick = (outranked or (endingSoon and best)) and st.spell or (e.known[e.last] and e.last)
         if not pick then
           for sp = 1, #e.spells do
             if e.known[sp] then
@@ -1179,9 +1195,201 @@ local function SelfBuffReminders(out)
       out[#out + 1] = {
         id = "Upkeep.selfbuff" .. i, icon = e.icons[pick], spell = spell,
         click = { type = "spell", spell = spell },
+        glow = gap,  -- an early warning for one still up doesn't glow; only a gap does
       }
     end
   end
+end
+
+--------------------------------------------------------------------------------
+-- Experience bonuses, below the level cap:
+--   * Food that adds experience: with some in your bags and not Well Fed with an
+--     experience bonus, a reminder offers the best of it; a click starts eating.
+--   * A Cozy Sleeping Bag: with one in your bags and off cooldown, a reminder offers it
+--     while you're not fully Well-Rested - under three stacks, each a minute's rest - or
+--     have less than ten minutes of it left, when a minute's rest tops it up instead of
+--     three building it again; a click unfurls it.
+-- Neither comes up in combat, where you can't use them, and neither glows. They are
+-- recognised by English text: "experience" on the food's and the buffs' tooltips, and the
+-- sleeping bag and buff names.
+--------------------------------------------------------------------------------
+
+local XP_TEXT = "xperience"  -- "Experience ..." or "... experience gained from kills ..."
+local FOOD_BUFF = "Well Fed"
+local SLEEPING_BAG = "Cozy Sleeping Bag"
+local BAG_BUFF = "Well-Rested"
+local BAG_STACKS = 3          -- Well-Rested's full strength
+local BAG_EARLY = 10 * 60     -- seconds left at which to top it up
+local XP_CHECK = 1           -- seconds between looks at your buffs
+local XP_RETRIES = 5         -- times to look again for items still loading
+local ITEM_CLASS_CONSUMABLE = Enum and Enum.ItemClass and Enum.ItemClass.Consumable or 0
+
+local xpFoodOf = {}  -- item id -> true if its tooltip promises experience, false if not
+local xpFoods = {}   -- item ids of such food in your bags
+local sleepingBag    -- item id of a sleeping bag in your bags
+local xpCheckAt = 0
+local foodEntry, bagEntry  -- the reminders while they're wanted
+local xpRetries = 0
+
+local function TooltipSays(data, text)
+  for _, line in ipairs(data.lines) do
+    local t = line.leftText
+    if not isSecret(t) and type(t) == "string" and t:find(text, 1, true) then return true end
+  end
+  return false
+end
+
+local function MaxLevel()
+  local ok, cap = pcall(GetMaxLevelForPlayerExpansion)
+  if ok and type(cap) == "number" and cap > 0 then return cap end
+  return MAX_PLAYER_LEVEL
+end
+
+-- Looks through your bags for experience food and a sleeping bag. Each kind of consumable
+-- is asked about once its tooltip has loaded; anything still loading is asked again a
+-- little later.
+local function SeedXP()
+  wipe(xpFoods)
+  sleepingBag = nil
+  if not (C_Container and C_TooltipInfo and C_TooltipInfo.GetBagItem) then return end
+  local getInfo = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+  local seen, loading = {}, false
+  for bag = 0, tonumber(NUM_BAG_SLOTS) or 4 do
+    for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+      local id = C_Container.GetContainerItemID(bag, slot)
+      if id and not isSecret(id) and not seen[id] then
+        seen[id] = true
+        local name = C_Item.GetItemNameByID(id)
+        if name == SLEEPING_BAG then
+          sleepingBag = id
+        elseif name == nil then
+          loading = true
+        end
+        if xpFoodOf[id] == nil then
+          if select(6, getInfo(id)) ~= ITEM_CLASS_CONSUMABLE then
+            xpFoodOf[id] = false
+          else
+            local ok, data = pcall(C_TooltipInfo.GetBagItem, bag, slot)
+            if ok and data and data.lines and #data.lines > 1 then
+              xpFoodOf[id] = TooltipSays(data, XP_TEXT)
+            else
+              loading = true
+            end
+          end
+        end
+        if xpFoodOf[id] then xpFoods[#xpFoods + 1] = id end
+      end
+    end
+  end
+  if loading and xpRetries < XP_RETRIES then
+    xpRetries = xpRetries + 1
+    C_Timer.After(3, SeedXP)
+  elseif not loading then
+    xpRetries = 0
+  end
+end
+
+-- The names of the buffs on you that mention experience, as a set, and whether the scan
+-- can be trusted to have seen every buff. into, if given, collects the names in order.
+local function XPBuffs(into)
+  local names, readable = {}, 0
+  if not (C_TooltipInfo and C_TooltipInfo.GetUnitAura) then return names, false end
+  for i = 1, 40 do
+    local ok, data = pcall(C_TooltipInfo.GetUnitAura, "player", i, "HELPFUL")
+    if not ok or not data or not data.lines then break end
+    readable = readable + 1
+    if TooltipSays(data, XP_TEXT) then
+      local name = data.lines[1] and data.lines[1].leftText
+      if not isSecret(name) and type(name) == "string" then
+        names[name] = true
+        if into then into[#into + 1] = name end
+      end
+    end
+  end
+  return names, AurasTrusted(readable, "player")
+end
+
+-- true if the buff is on you, false if it's surely not, nil if that can't be told.
+local function BuffState(names, trusted, buff)
+  if names[buff] then return true end
+  if trusted then return false end
+end
+
+-- Well-Rested's stacks and seconds left, or nil if it isn't on you or can't be read.
+local function WellRested()
+  local find = C_UnitAuras and C_UnitAuras.GetAuraDataBySpellName
+  if not find then return end
+  local ok, aura = pcall(find, "player", BAG_BUFF, "HELPFUL")
+  if not ok or not aura then return end
+  local stacks, exp = aura.applications, aura.expirationTime
+  if isSecret(stacks) or isSecret(exp) or type(exp) ~= "number" then return end
+  local left = exp > 0 and exp - GetTime() or math.huge
+  return math.max(tonumber(stacks) or 0, 1), left
+end
+
+local function OnCooldown(id)
+  local ok, start, duration = pcall(C_Container.GetItemCooldown, id)
+  -- The global cooldown alone doesn't count.
+  return ok and type(duration) == "number" and duration > 1.5 and start + duration > GetTime()
+end
+
+-- The best food you can eat, as a reminder: the highest item level, then the biggest stack.
+-- The one already shown is kept while it's still the pick.
+local function BestFood()
+  local best, bestLevel, bestCount
+  for _, id in ipairs(xpFoods) do
+    if C_Item.IsUsableItem(id) then
+      local itemLevel = select(4, C_Item.GetItemInfo(id)) or 0
+      local count = ItemCount(id)
+      if not best or itemLevel > bestLevel or (itemLevel == bestLevel and count > bestCount) then
+        best, bestLevel, bestCount = id, itemLevel, count
+      end
+    end
+  end
+  if not best then return nil end
+  if foodEntry and foodEntry.item == best then return foodEntry end
+  return {
+    id = "Upkeep.xpfood", icon = ItemIcon(best), item = best,
+    click = { type = "item", item = "item:" .. best }, glow = false,
+  }
+end
+
+local function XPReminders(out)
+  local level, cap = UnitLevel("player"), MaxLevel()
+  if (#xpFoods == 0 and not sleepingBag) or type(level) ~= "number" or type(cap) ~= "number" or level >= cap then
+    foodEntry, bagEntry = nil, nil
+    return
+  end
+  -- In combat they stay as they were: they don't come up, and one already there waits.
+  local now = GetTime()
+  if not UnitAffectingCombat("player") and now >= xpCheckAt then
+    xpCheckAt = now + XP_CHECK
+    local names, trusted = XPBuffs()
+    local fed = BuffState(names, trusted, FOOD_BUFF)
+    if fed then
+      foodEntry = nil
+    elseif fed == false then
+      foodEntry = BestFood()
+    end
+    -- wanted stays nil when that can't be told, and the reminder stays as it was.
+    local rested, wanted = BuffState(names, trusted, BAG_BUFF), nil
+    if rested == false then
+      wanted = true
+    elseif rested then
+      local stacks, left = WellRested()
+      wanted = stacks ~= nil and (stacks < BAG_STACKS or left < BAG_EARLY)
+    end
+    if not sleepingBag or wanted == false or OnCooldown(sleepingBag) then
+      bagEntry = nil
+    elseif wanted and not (bagEntry and bagEntry.item == sleepingBag) then
+      bagEntry = {
+        id = "Upkeep.sleepingbag", icon = ItemIcon(sleepingBag), item = sleepingBag,
+        click = { type = "item", item = "item:" .. sleepingBag }, glow = false,
+      }
+    end
+  end
+  if foodEntry then out[#out + 1] = foodEntry end
+  if bagEntry then out[#out + 1] = bagEntry end
 end
 
 local selfOwned, selfWanted, selfPending = {}, {}, {}
@@ -1190,7 +1398,7 @@ local function Pulse()
   return 0.4 + 0.6 * math.abs(math.sin(GetTime() * math.pi * 1.5))
 end
 
--- Blessing, weapon enchants, self buffs, in the order they first came up.
+-- Blessing, weapon enchants, self buffs, food and sleeping bag, in the order they first came up.
 local function UpdateSelf()
   wipe(selfWanted)
   if isPaladin then
@@ -1198,6 +1406,7 @@ local function UpdateSelf()
   end
   WeaponReminders(selfWanted)
   SelfBuffReminders(selfWanted)
+  XPReminders(selfWanted)
   Sync(selfRow, selfOwned, selfWanted)
   local combat, pulse = UnitAffectingCombat("player"), Pulse()
   DrawPlainRow(selfPlain, Pending(selfRow, selfPending), combat, pulse)
@@ -1404,6 +1613,22 @@ local function Debug()
       tostring(st and st.rank),
       st and st.exp and string.format("%.0fs", st.exp - GetTime()) or "nil"))
   end
+  local foods = {}
+  for _, id in ipairs(xpFoods) do
+    foods[#foods + 1] = (C_Item.GetItemNameByID(id) or id) .. (C_Item.IsUsableItem(id) and "" or " (not usable)")
+  end
+  local xpBuffs = {}
+  local names, trusted = XPBuffs(xpBuffs)
+  print(string.format("Upkeep: level %s of %s, experience food: %s, sleeping bag: %s, buffs mentioning "
+    .. "experience: %s, well fed: %s, well rested: %s", tostring(UnitLevel("player")), tostring(MaxLevel()),
+    #foods > 0 and table.concat(foods, ", ") or "none",
+    sleepingBag and (OnCooldown(sleepingBag) and "on cooldown" or "ready") or "none",
+    #xpBuffs > 0 and table.concat(xpBuffs, ", ") or "none",
+    tostring(BuffState(names, trusted, FOOD_BUFF)), tostring(BuffState(names, trusted, BAG_BUFF))))
+  local stacks, left = WellRested()
+  if stacks then
+    print(string.format("Upkeep: Well-Rested %d of %d stacks, %.0f min left", stacks, BAG_STACKS, left / 60))
+  end
   for _, row in ipairs(buttonRows) do
     for _, id in ipairs(row.order) do
       local e = row.entries[id]
@@ -1416,7 +1641,7 @@ end
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("SPELLS_CHANGED")
-events:RegisterEvent("BAG_UPDATE_DELAYED")  -- poisons come and go from your bags
+events:RegisterEvent("BAG_UPDATE_DELAYED")  -- poisons, food and sleeping bags come and go
 events:RegisterEvent("ADDON_ACTION_FORBIDDEN")
 events:RegisterEvent("ADDON_ACTION_BLOCKED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")  -- reminder changes held back by combat
@@ -1439,6 +1664,7 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3)
     SeedKnown()
     SeedWeaponEnchants()
     SeedSelfBuffs()
+    SeedXP()
   elseif event == "PLAYER_REGEN_ENABLED" then
     for _, row in ipairs(buttonRows) do
       if row.dirty then LayoutRow(row) end
@@ -1449,6 +1675,7 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3)
     UpdateTarget()
   elseif event == "BAG_UPDATE_DELAYED" then
     SeedWeaponEnchants()
+    SeedXP()
   elseif event == "SPELLS_CHANGED" then
     SeedKnown()
     SeedWeaponEnchants()
