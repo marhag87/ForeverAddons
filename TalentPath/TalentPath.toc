@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: TalentPath
+## Notes: Follows a Wowhead talent order. Paste a talent calculator link for each spec into the box under the talent window, and the window marks the next talents to take; it warns you instead if your talents leave the order. With Upkeep, the next talent also shows as a reminder.
+## Author: Martin
+## Version: 1.0.0
+## OptionalDeps: Upkeep
+## SavedVariablesPerCharacter: TalentPathCharDB
+
+Link.lua
+TalentPath.lua
