@@ -44,6 +44,7 @@ local function ShowReminder(id, info, key)
 		return
 	end
 	sentReminders[id] = key
+	info.resting = true -- setting up happens in town as much as anywhere
 	Upkeep.AddReminder(id, info)
 end
 

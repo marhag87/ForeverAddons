@@ -565,6 +565,15 @@ local function DrawPlainRow(row, entries, combat, pulse)
   row.panel:Show()
 end
 
+-- In a rested area - an inn or a city - reminders stay out of the way, except those added
+-- with resting = true (such as a lure reminder, for fishing in town). They are kept, not
+-- removed, and come back as you leave.
+local resting = false
+
+local function Shown(e)
+  return e.resting or not resting
+end
+
 -- Buttons. dir < 0 packs right to left from the panel's bottom-right corner, dir > 0 left
 -- to right from its bottom-left. place puts the panel where it belongs (out of combat);
 -- onLayout runs after every layout.
@@ -573,7 +582,7 @@ local buttonRows = {}
 local function NewButtonRow(parent, dir)
   local row = {
     panel = CreateFrame("Frame", nil, parent), dir = dir,
-    entries = {},  -- id -> entry, plus click, removed, laidOut
+    entries = {},  -- id -> entry, plus click, removed, laidOut, hasButton
     order = {},    -- ids, oldest first; the oldest sits nearest the anchor
     buttons = {},  -- by position
     shown = 0,     -- buttons laid out
@@ -624,27 +633,32 @@ local function LayoutRow(row)
       table.remove(row.order, i)
     end
   end
-  for i, id in ipairs(row.order) do
+  local n = 0
+  for _, id in ipairs(row.order) do
     local e = row.entries[id]
-    local b = RowButton(row, i)
-    for k in pairs(b.attributes or {}) do
-      b:SetAttribute(k, nil)
+    -- Up to date either way: a button if it's shown, none while resting hides it.
+    e.laidOut, e.hasButton = true, Shown(e)
+    if e.hasButton then
+      n = n + 1
+      local b = RowButton(row, n)
+      for k in pairs(b.attributes or {}) do
+        b:SetAttribute(k, nil)
+      end
+      b.attributes = e.click
+      for k, v in pairs(e.click or {}) do
+        b:SetAttribute(k, v)
+      end
+      b.id = id
+      b:Show()
     end
-    b.attributes = e.click
-    for k, v in pairs(e.click or {}) do
-      b:SetAttribute(k, v)
-    end
-    b.id = id
-    e.laidOut = true
-    b:Show()
   end
-  for i = #row.order + 1, #row.buttons do
+  for i = n + 1, #row.buttons do
     local b = row.buttons[i]
     SetGlow(b, false)
     b.id = nil
     b:Hide()
   end
-  row.shown = #row.order
+  row.shown = n
   if row.onLayout then row.onLayout() end
 end
 
@@ -677,7 +691,9 @@ local function RowAdd(row, id, info)
   e.icon = info.icon or "Interface/Icons/INV_Misc_QuestionMark"
   e.tooltip, e.glow, e.desaturate = info.tooltip, info.glow ~= false, info.desaturate ~= false
   e.item, e.spell = tonumber(info.item), tonumber(info.spell)
-  if not e.laidOut or not SameClick(e.click, click) then
+  local wasShown = Shown(e)
+  e.resting = info.resting == true
+  if not e.laidOut or not SameClick(e.click, click) or Shown(e) ~= wasShown then
     e.click, e.removed, e.laidOut = click, nil, false
     LayoutRow(row)
   elseif e.removed then
@@ -692,12 +708,12 @@ local function RowRemove(row, id)
   LayoutRow(row)
 end
 
--- The entries waiting to become buttons, into out.
+-- The entries to show that have no up-to-date button yet, into out.
 local function Pending(row, out)
   wipe(out)
   for _, id in ipairs(row.order) do
     local e = row.entries[id]
-    if not e.laidOut and not e.removed then out[#out + 1] = e end
+    if Shown(e) and not e.removed and not (e.laidOut and e.hasButton) then out[#out + 1] = e end
   end
   return out
 end
@@ -706,7 +722,18 @@ local function DrawRow(row, combat, pulse)
   for i = 1, row.shown do
     local b = row.buttons[i]
     local e = b.id and row.entries[b.id]
-    if e then Style(b, e, combat, pulse, e.removed or not e.laidOut) end
+    if e then Style(b, e, combat, pulse, e.removed or not e.laidOut or not Shown(e)) end
+  end
+end
+
+-- Notices entering or leaving a rested area and lays the rows out again (after combat, if
+-- in it). Returns nothing; called every refresh and on PLAYER_UPDATE_RESTING.
+local function UpdateResting()
+  local now = IsResting() == true
+  if now == resting then return end
+  resting = now
+  for _, row in ipairs(buttonRows) do
+    LayoutRow(row)
   end
 end
 
@@ -771,6 +798,7 @@ selfRow.place = PlaceSelfRow
 -- info.tooltip:    text shown on mouseover, when neither item nor spell is given.
 -- info.glow:       false to stay unlit in combat.
 -- info.desaturate: false to show the icon in full colour, unlit.
+-- info.resting:    true to show it in rested areas too, where reminders are hidden.
 Upkeep = Upkeep or {}
 
 function Upkeep.AddReminder(id, info)
@@ -1403,6 +1431,7 @@ end
 
 -- Blessing, weapon enchants, self buffs, food and sleeping bag, in the order they first came up.
 local function UpdateSelf()
+  UpdateResting()
   wipe(selfWanted)
   if isPaladin then
     selfWanted[#selfWanted + 1] = BlessingReminder()
@@ -1648,6 +1677,7 @@ events:RegisterEvent("BAG_UPDATE_DELAYED")  -- poisons, food and sleeping bags c
 events:RegisterEvent("ADDON_ACTION_FORBIDDEN")
 events:RegisterEvent("ADDON_ACTION_BLOCKED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")  -- reminder changes held back by combat
+events:RegisterEvent("PLAYER_UPDATE_RESTING")  -- entering or leaving a rested area
 events:RegisterUnitEvent("UNIT_SPELLCAST_SENT", "player")
 events:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
 
@@ -1659,6 +1689,7 @@ local sentCasts = {}
 events:SetScript("OnEvent", function(_, event, a1, a2, a3)
   if event == "PLAYER_LOGIN" then
     PlaceBar()
+    resting = IsResting() == true
     -- Place the button rows now the bar has its size (held back if in combat).
     for _, row in ipairs(buttonRows) do
       row.placed = false
@@ -1674,6 +1705,10 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3)
     end
     -- Redraw in the same frame, so a plain icon hides as its button takes its place
     -- rather than showing beside it until the next refresh.
+    UpdateSelf()
+    UpdateTarget()
+  elseif event == "PLAYER_UPDATE_RESTING" then
+    UpdateResting()
     UpdateSelf()
     UpdateTarget()
   elseif event == "BAG_UPDATE_DELAYED" then

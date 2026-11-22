@@ -295,6 +295,7 @@ local function ShowReminder(state)
 			spell = pick.spellID,
 			click = TalentMicroButton and { type = "click", clickbutton = TalentMicroButton } or nil,
 			glow = false,
+			resting = true, -- spending points in town is fine
 		})
 	else
 		Upkeep.RemoveReminder(REMINDER)

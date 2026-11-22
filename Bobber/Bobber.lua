@@ -255,6 +255,7 @@ local function UpdateLure()
 				click = { type = "macro", macrotext = "/use item:" .. bestLure .. "\n/use 16" },
 				item = bestLure,
 				glow = false,
+				resting = true, -- fishing in town wants it too
 			})
 		end
 	elseif lureShown then
