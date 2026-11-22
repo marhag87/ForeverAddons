@@ -2,9 +2,10 @@
 -- blessings is on you, and the blessings you could still cast on your target. The same
 -- reminder covers weapon enchants (Shaman imbues, Rogue poisons) and buffs a class keeps
 -- on itself, listed per class in WEAPON_ENCHANTS and SELF_BUFFS below, and buffs any
--- class keeps up, such as a gatherer's Find Minerals or Find Herbs. Other addons can add
--- clickable reminders of their own with Upkeep.AddReminder (see "Reminders from other
--- addons" below).
+-- class keeps up, such as a gatherer's Find Minerals or Find Herbs. Every reminder is a
+-- button that casts what's missing and shows its tooltip, except that one coming up in
+-- combat is a plain icon until the fight ends (see "Reminder icons" below). Other addons
+-- can add reminders of their own with Upkeep.AddReminder.
 --
 -- This client restricts addons the way retail does. Established by testing in game:
 --   * Enumerating the spellbook and reading the combat log are forbidden outright, and
@@ -24,16 +25,12 @@ local isPaladin = class == "PALADIN"
 -- its ranks as spell ids, lowest first, so a position is a rank; a lower rank than you
 -- know counts as missing. An entry only reminds you once you know one of its spells.
 -- duration, in seconds, times a cast in combat until the buff has been seen on you.
--- clickable puts the reminder in the clickable row, as a button that casts the spell and
--- shows its tooltip. Only for buffs that can wait out a fight: that row can't change in
--- combat.
 local SELF_BUFFS = {
   ALL = {
     -- One tracking at a time, so with both professions either one satisfies it.
     {
       { 2580 },  -- Find Minerals, known once you have trained Mining
       { 2383 },  -- Find Herbs, known once you have trained Herbalism
-      clickable = true,
     },
   },
   SHAMAN = {
@@ -296,6 +293,7 @@ local CAST_WINDOW = 3  -- seconds within which a new aura on you is taken to be 
 
 local known = {}        -- names of the blessings you can cast, sorted
 local myRank = {}       -- key -> highest rank you know
+local blessingRanks = {} -- key -> the blessing's spell ids by rank, once you know it
 local icons = {}        -- key -> texture
 local lastKnown = {}    -- key -> last reading on you, or false for "read, and not there"
 local lastDur = {}      -- key -> duration last seen on you
@@ -336,9 +334,22 @@ local function SeedKnown()
         local key = Key(name)
         if not myRank[key] or rank > myRank[key] then myRank[key] = rank end
         icons[key] = icons[key] or SpellTexture(id)
+        blessingRanks[key] = ids
       end
     end
   end
+end
+
+-- The spell id of your best rank of a blessing, nil if not known by id.
+local function BlessingSpell(key)
+  local ids, rank = blessingRanks[key], myRank[key]
+  return ids and rank and ids[rank]
+end
+
+-- A blessing reminder: a click casts it on unit.
+local function BlessingEntry(id, key, unit)
+  local spell = BlessingSpell(key)
+  return { id = id, icon = IconFor(key), spell = spell, click = spell and { type = "spell", spell = spell, unit = unit } }
 end
 
 -- Did a blessing you just cast land on you? With no friendly target it self-casts.
@@ -468,226 +479,310 @@ local function SetGlow(t, on, alpha)
 end
 
 --------------------------------------------------------------------------------
--- On you: greyed icons beside the seal bar for whatever of yours is missing - a
--- blessing on a Paladin, and any weapon enchant or buff listed for your class. They
--- glow in combat, where the gap costs you something.
+-- Reminder icons. Each reminder is an entry: { id, icon, click, item or spell or tooltip,
+-- glow, desaturate }. Wherever it can be, it is a secure action button, so a click casts
+-- the spell or uses the item, and mouseover shows its tooltip.
+--
+-- The game freezes such buttons in combat: they cannot appear, disappear, move or change
+-- what they do. So a reminder that comes up in combat shows at once as a plain icon, with
+-- its tooltip but no click, and becomes a button when combat ends; one that goes in combat
+-- dims at once and leaves when combat ends. The combat glow works throughout.
+--
+-- A frame holding such buttons cannot move in combat either, and neither can a frame it is
+-- anchored to, so the button rows are anchored where they belong, not to the seal bar,
+-- which stays free to show and hide.
 --------------------------------------------------------------------------------
 
-local selfPanel = CreateFrame("Frame", nil, UIParent)
-selfPanel:SetSize(ICON_SIZE, ICON_SIZE)
-selfPanel:SetPoint("BOTTOMRIGHT", bar, "TOPLEFT", -2, 2)
-selfPanel:Hide()
-
-local selfIcons = {}
-local selfAuras, selfView, selfList = {}, {}, {}
-
-local selfTextures = {}  -- what to show, first one in the seal bar's corner
-
-local function DrawSelf()
-  local n = #selfTextures
-  local combat = UnitAffectingCombat("player")
-  local pulse = 0.4 + 0.6 * math.abs(math.sin(GetTime() * math.pi * 1.5))
-  for i, texture in ipairs(selfTextures) do
-    local t = MakeIcon(selfPanel, selfIcons, i, -1)
-    t.icon:SetTexture(texture)
-    t.icon:SetDesaturated(true)
-    t.icon:SetAlpha(combat and 1 or 0.65)
-    SetGlow(t, combat, pulse)
-    t:Show()
+local function ShowEntryTooltip(owner, e)
+  if not (e and (e.item or e.spell or e.tooltip)) then return end
+  GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+  if e.item then
+    GameTooltip:SetItemByID(e.item)
+  elseif e.spell then
+    GameTooltip:SetSpellByID(e.spell)
+  else
+    GameTooltip:SetText(e.tooltip, 1, 1, 1, 1, true)
   end
-  for i = n + 1, #selfIcons do
-    SetGlow(selfIcons[i], false)
-    selfIcons[i]:Hide()
-  end
-  if n == 0 then
-    selfPanel:Hide()
-    return
-  end
-  selfPanel:SetWidth(n * ICON_SIZE + (n - 1) * ICON_GAP)
-  selfPanel:Show()
+  GameTooltip:Show()
 end
 
---------------------------------------------------------------------------------
--- Reminders from other addons, through Upkeep.AddReminder and Upkeep.RemoveReminder.
---
--- They sit in the seal bar's corner, ahead of Upkeep's own icons, and a click on one
--- can act: each is a secure action button, so it can cast a spell or set your focus.
--- The game freezes such buttons in combat - they cannot appear, disappear, move or
--- change what they do - so changes made in combat wait for it to end. One removed in
--- combat dims at once and goes when combat ends. The combat glow works throughout.
---
--- For the same reason the frame holding them cannot move in combat, and neither can a
--- frame it is anchored to. It is anchored where the seal bar's corner is rather than to
--- the bar, so the bar stays free.
---------------------------------------------------------------------------------
+local function HideTooltip()
+  GameTooltip:Hide()
+end
 
-local apiPanel = CreateFrame("Frame", nil, UIParent)
-apiPanel:SetSize(1, ICON_SIZE)
+-- Greyed, and glowing in combat, for something missing; in full colour and unlit for
+-- something you could do (desaturate = false). Dimmed while it waits to go.
+local function Style(t, e, combat, pulse, dimmed)
+  t.icon:SetTexture(e.icon)
+  if not e.desaturate then
+    t.icon:SetDesaturated(false)
+    t.icon:SetAlpha(dimmed and 0.25 or 0.9)
+    SetGlow(t, false)
+  else
+    t.icon:SetDesaturated(true)
+    t.icon:SetAlpha(dimmed and 0.25 or (combat and 1 or 0.65))
+    SetGlow(t, not dimmed and combat and e.glow, pulse)
+  end
+end
 
-local apiReminders = {}   -- id -> { icon, click, tooltip, glow, removed }
-local apiOrder = {}       -- ids, oldest first; the oldest sits in the corner
-local apiButtons = {}     -- buttons by position
-local apiShown = 0        -- how many buttons are laid out
-local apiDirty = false    -- a change is waiting for combat to end
-local apiPlaced = false   -- apiPanel has been put in the bar's corner
+-- Plain icons, for reminders that can't be buttons until combat ends.
+local function NewPlainRow(dir)
+  local row = { panel = CreateFrame("Frame", nil, UIParent), icons = {}, dir = dir }
+  row.panel:SetSize(ICON_SIZE, ICON_SIZE)
+  row.panel:Hide()
+  return row
+end
 
-local function ApiButton(i)
-  local b = apiButtons[i]
+local function DrawPlainRow(row, entries, combat, pulse)
+  local n = #entries
+  for i, e in ipairs(entries) do
+    local t = row.icons[i]
+    if not t then
+      t = MakeIcon(row.panel, row.icons, i, row.dir)
+      t:EnableMouse(true)
+      t:SetScript("OnEnter", function(self) ShowEntryTooltip(self, self.entry) end)
+      t:SetScript("OnLeave", HideTooltip)
+    end
+    t.entry = e
+    Style(t, e, combat, pulse)
+    t:Show()
+  end
+  for i = n + 1, #row.icons do
+    SetGlow(row.icons[i], false)
+    row.icons[i].entry = nil
+    row.icons[i]:Hide()
+  end
+  if n == 0 then
+    row.panel:Hide()
+    return
+  end
+  row.panel:SetWidth(n * ICON_SIZE + (n - 1) * ICON_GAP)
+  row.panel:Show()
+end
+
+-- Buttons. dir < 0 packs right to left from the panel's bottom-right corner, dir > 0 left
+-- to right from its bottom-left. place puts the panel where it belongs (out of combat);
+-- onLayout runs after every layout.
+local buttonRows = {}
+
+local function NewButtonRow(parent, dir)
+  local row = {
+    panel = CreateFrame("Frame", nil, parent), dir = dir,
+    entries = {},  -- id -> entry, plus click, removed, laidOut
+    order = {},    -- ids, oldest first; the oldest sits nearest the anchor
+    buttons = {},  -- by position
+    shown = 0,     -- buttons laid out
+    dirty = false, -- a change is waiting for combat to end
+  }
+  row.panel:SetSize(1, ICON_SIZE)
+  buttonRows[#buttonRows + 1] = row
+  return row
+end
+
+local function RowButton(row, i)
+  local b = row.buttons[i]
   if b then return b end
-  b = CreateFrame("Button", nil, apiPanel, "SecureActionButtonTemplate")
+  b = CreateFrame("Button", nil, row.panel, "SecureActionButtonTemplate")
   b:SetSize(ICON_SIZE, ICON_SIZE)
-  b:SetPoint("BOTTOMRIGHT", apiPanel, "BOTTOMRIGHT", -(i - 1) * (ICON_SIZE + ICON_GAP), 0)
+  local step = (i - 1) * (ICON_SIZE + ICON_GAP)
+  if row.dir > 0 then
+    b:SetPoint("BOTTOMLEFT", row.panel, "BOTTOMLEFT", step, 0)
+  else
+    b:SetPoint("BOTTOMRIGHT", row.panel, "BOTTOMRIGHT", -step, 0)
+  end
   -- With key-down casting on (ActionButtonUseKeyDown) the template acts on the press,
   -- so both halves of a click have to reach it.
   b:RegisterForClicks("AnyUp", "AnyDown")
   AddIconArt(b)
   b:SetHighlightTexture("Interface/Buttons/ButtonHilight-Square", "ADD")
-  b:SetScript("OnEnter", function(self)
-    local r = self.id and apiReminders[self.id]
-    if not (r and (r.item or r.spell or r.tooltip)) then return end
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    if r.item then
-      GameTooltip:SetItemByID(r.item)
-    elseif r.spell then
-      GameTooltip:SetSpellByID(r.spell)
-    else
-      GameTooltip:SetText(r.tooltip, 1, 1, 1, 1, true)
-    end
-    GameTooltip:Show()
-  end)
-  b:SetScript("OnLeave", function()
-    GameTooltip:Hide()
-  end)
-  apiButtons[i] = b
+  b:SetScript("OnEnter", function(self) ShowEntryTooltip(self, self.id and row.entries[self.id]) end)
+  b:SetScript("OnLeave", HideTooltip)
+  row.buttons[i] = b
   return b
 end
 
--- Upkeep's own icons start after the reminders.
-local function ShiftSelfPanel()
-  local shift = apiShown * (ICON_SIZE + ICON_GAP)
-  selfPanel:ClearAllPoints()
-  selfPanel:SetPoint("BOTTOMRIGHT", bar, "TOPLEFT", -2 - shift, 2)
-end
-
--- Out of combat only. Puts apiPanel where the seal bar's top-left corner is, matching
--- PlaceBar's arithmetic.
-local function PlaceApiPanel()
+-- Out of combat only: makes the buttons match the entries.
+local function LayoutRow(row)
   if InCombatLockdown() then
-    apiDirty = true
+    row.dirty = true
     return
   end
-  apiPanel:ClearAllPoints()
-  local hb = PlayerHealthBar()
-  local hbWidth = hb and hb:GetWidth()
-  local w, h = bar:GetWidth(), bar:GetHeight()
-  if hbWidth and hbWidth > 0 then
-    apiPanel:SetPoint("BOTTOMRIGHT", hb, "TOP", -w / 2 - 2, BAR_GAP + h + 2)
-  else
-    apiPanel:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -w / 2 - 2, BAR_FALLBACK_Y + h / 2 + 2)
+  row.dirty = false
+  if row.place and not row.placed then
+    row.place()
+    row.placed = true
   end
-  apiPlaced = true
-end
-
--- Out of combat only: makes the buttons match apiReminders.
-local function LayoutApi()
-  if InCombatLockdown() then
-    apiDirty = true
-    return
-  end
-  apiDirty = false
-  if not apiPlaced then PlaceApiPanel() end
-  for i = #apiOrder, 1, -1 do
-    local id = apiOrder[i]
-    if apiReminders[id].removed then
-      apiReminders[id] = nil
-      table.remove(apiOrder, i)
+  for i = #row.order, 1, -1 do
+    local id = row.order[i]
+    if row.entries[id].removed then
+      row.entries[id] = nil
+      table.remove(row.order, i)
     end
   end
-  for i, id in ipairs(apiOrder) do
-    local r = apiReminders[id]
-    local b = ApiButton(i)
+  for i, id in ipairs(row.order) do
+    local e = row.entries[id]
+    local b = RowButton(row, i)
     for k in pairs(b.attributes or {}) do
       b:SetAttribute(k, nil)
     end
-    b.attributes = r.click
-    for k, v in pairs(r.click or {}) do
+    b.attributes = e.click
+    for k, v in pairs(e.click or {}) do
       b:SetAttribute(k, v)
     end
     b.id = id
+    e.laidOut = true
     b:Show()
   end
-  for i = #apiOrder + 1, #apiButtons do
-    local b = apiButtons[i]
+  for i = #row.order + 1, #row.buttons do
+    local b = row.buttons[i]
     SetGlow(b, false)
     b.id = nil
     b:Hide()
   end
-  apiShown = #apiOrder
-  ShiftSelfPanel()
+  row.shown = #row.order
+  if row.onLayout then row.onLayout() end
 end
 
-local function DrawApi()
-  local combat = UnitAffectingCombat("player")
-  local pulse = 0.4 + 0.6 * math.abs(math.sin(GetTime() * math.pi * 1.5))
-  for i = 1, apiShown do
-    local b = apiButtons[i]
-    local r = b.id and apiReminders[b.id]
-    if r then
-      b.icon:SetTexture(r.icon)
-      b.icon:SetDesaturated(true)
-      if r.removed then
-        b.icon:SetAlpha(0.25)
-        SetGlow(b, false)
-      else
-        b.icon:SetAlpha(combat and 1 or 0.65)
-        SetGlow(b, combat and r.glow, pulse)
-      end
+local function SameClick(a, b)
+  if a == b then return true end
+  if not (a and b) then return false end
+  for k, v in pairs(a) do
+    if b[k] ~= v then return false end
+  end
+  for k in pairs(b) do
+    if a[k] == nil then return false end
+  end
+  return true
+end
+
+-- Adds or updates a reminder. Only a new one, or a new click, needs a new layout; the
+-- look and tooltip are read live.
+local function RowAdd(row, id, info)
+  local click
+  if type(info.click) == "table" then
+    click = {}
+    for k, v in pairs(info.click) do click[k] = v end
+  end
+  local e = row.entries[id]
+  if not e then
+    e = {}
+    row.entries[id] = e
+    row.order[#row.order + 1] = id
+  end
+  e.icon = info.icon or "Interface/Icons/INV_Misc_QuestionMark"
+  e.tooltip, e.glow, e.desaturate = info.tooltip, info.glow ~= false, info.desaturate ~= false
+  e.item, e.spell = tonumber(info.item), tonumber(info.spell)
+  if not e.laidOut or not SameClick(e.click, click) then
+    e.click, e.removed, e.laidOut = click, nil, false
+    LayoutRow(row)
+  elseif e.removed then
+    e.removed = nil  -- wanted again before it went; its button still does the right thing
+  end
+end
+
+local function RowRemove(row, id)
+  local e = row.entries[id]
+  if not e or e.removed then return end
+  e.removed = true
+  LayoutRow(row)
+end
+
+-- The entries waiting to become buttons, into out.
+local function Pending(row, out)
+  wipe(out)
+  for _, id in ipairs(row.order) do
+    local e = row.entries[id]
+    if not e.laidOut and not e.removed then out[#out + 1] = e end
+  end
+  return out
+end
+
+local function DrawRow(row, combat, pulse)
+  for i = 1, row.shown do
+    local b = row.buttons[i]
+    local e = b.id and row.entries[b.id]
+    if e then Style(b, e, combat, pulse, e.removed or not e.laidOut) end
+  end
+end
+
+-- Brings one source's reminders up to date: adds every entry in wanted and removes the
+-- rest of the ones it added before (owned: id -> true).
+local function Sync(row, owned, wanted)
+  local keep = {}
+  for _, e in ipairs(wanted) do
+    keep[e.id] = true
+    owned[e.id] = true
+    RowAdd(row, e.id, e)
+  end
+  for id in pairs(owned) do
+    if not keep[id] then
+      owned[id] = nil
+      RowRemove(row, id)
     end
   end
 end
 
+--------------------------------------------------------------------------------
+-- On you: reminders beside the seal bar for whatever of yours is missing - a blessing
+-- on a Paladin, and any weapon enchant or buff listed for your class - plus reminders
+-- other addons add through Upkeep.AddReminder. Buttons sit in the seal bar's corner,
+-- plain icons to their left.
+--------------------------------------------------------------------------------
+
+local selfRow = NewButtonRow(UIParent, -1)
+local selfPlain = NewPlainRow(-1)
+
+-- Plain icons start after the buttons.
+local function ShiftSelfPlain()
+  local shift = selfRow.shown * (ICON_SIZE + ICON_GAP)
+  selfPlain.panel:ClearAllPoints()
+  selfPlain.panel:SetPoint("BOTTOMRIGHT", bar, "TOPLEFT", -2 - shift, 2)
+end
+selfRow.onLayout = ShiftSelfPlain
+ShiftSelfPlain()
+
+-- Out of combat only. Puts the button row where the seal bar's top-left corner is,
+-- matching PlaceBar's arithmetic.
+local function PlaceSelfRow()
+  local panel = selfRow.panel
+  panel:ClearAllPoints()
+  local hb = PlayerHealthBar()
+  local hbWidth = hb and hb:GetWidth()
+  local w, h = bar:GetWidth(), bar:GetHeight()
+  if hbWidth and hbWidth > 0 then
+    panel:SetPoint("BOTTOMRIGHT", hb, "TOP", -w / 2 - 2, BAR_GAP + h + 2)
+  else
+    panel:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -w / 2 - 2, BAR_FALLBACK_Y + h / 2 + 2)
+  end
+end
+selfRow.place = PlaceSelfRow
+
 -- The public API. id names the reminder; adding an id again updates it.
--- info.icon:    texture path or file id.
--- info.click:   secure action attributes for a click, e.g. { type = "spell", spell = 71 }
---               or { type = "focus", unit = "party1" }. Without it a click does nothing.
--- info.item:    an item id; mouseover shows that item's own tooltip.
--- info.spell:   a spell id; mouseover shows that spell's own tooltip.
--- info.tooltip: text shown on mouseover, when neither item nor spell is given.
--- info.glow:    false to stay unlit in combat.
+-- info.icon:       texture path or file id.
+-- info.click:      secure action attributes for a click, e.g. { type = "spell", spell = 71 }
+--                  or { type = "focus", unit = "party1" }. Without it a click does nothing.
+-- info.item:       an item id; mouseover shows that item's own tooltip.
+-- info.spell:      a spell id; mouseover shows that spell's own tooltip.
+-- info.tooltip:    text shown on mouseover, when neither item nor spell is given.
+-- info.glow:       false to stay unlit in combat.
+-- info.desaturate: false to show the icon in full colour, unlit.
 Upkeep = Upkeep or {}
 
 function Upkeep.AddReminder(id, info)
   if type(id) ~= "string" or type(info) ~= "table" then
     error("Usage: Upkeep.AddReminder(id, info) with a string id and an info table", 2)
   end
-  local click
-  if type(info.click) == "table" then
-    click = {}
-    for k, v in pairs(info.click) do click[k] = v end
-  end
-  local r = apiReminders[id]
-  if not r then
-    r = {}
-    apiReminders[id] = r
-    apiOrder[#apiOrder + 1] = id
-  end
-  r.icon = info.icon or "Interface/Icons/INV_Misc_QuestionMark"
-  r.click, r.tooltip, r.glow, r.removed = click, info.tooltip, info.glow ~= false, nil
-  r.item = tonumber(info.item)
-  r.spell = tonumber(info.spell)
-  LayoutApi()
+  RowAdd(selfRow, id, info)
 end
 
 function Upkeep.RemoveReminder(id)
-  local r = apiReminders[id]
-  if not r then return end
-  r.removed = true
-  LayoutApi()
+  RowRemove(selfRow, id)
 end
 
+local selfAuras, selfView, selfList = {}, {}, {}
 local blessingShown  -- the blessing reminder's last answer, kept when a read fails
 
--- The icon to show for a missing blessing of yours, or nil.
+-- The reminder for a missing blessing of yours, or nil. A click casts it on you.
 local function BlessingReminder()
   if #known == 0 then
     blessingShown = nil
@@ -725,7 +820,7 @@ local function BlessingReminder()
   for _, key in ipairs(list) do
     if key == lastMine then pick = key end
   end
-  blessingShown = IconFor(pick)
+  blessingShown = BlessingEntry("Upkeep.blessing", pick, "player")
   return blessingShown
 end
 
@@ -762,23 +857,37 @@ local function ItemIcon(id)
 end
 
 -- Which options you can apply, and at what rank: a spell you know, or an item you carry.
+-- bestSpell or bestItem is what a click on the reminder uses.
 local function SeedWeaponEnchants()
   for _, opt in ipairs(weaponOptions) do
-    opt.best = nil
+    opt.best, opt.bestSpell, opt.bestItem = nil, nil, nil
     for rank, id in ipairs(opt.spells or {}) do
       local ok, isKnown = pcall(IsSpellKnown, id)
       if ok and isKnown then
-        opt.best = rank  -- ranks go up, so the last one found is the highest
+        opt.best, opt.bestSpell = rank, id  -- ranks go up, so the last one found is the highest
         opt.icon = SpellTexture(id) or opt.icon
       end
     end
     for rank, id in ipairs(opt.items or {}) do
       if ItemCount(id) > 0 then
-        opt.best = rank
+        opt.best, opt.bestSpell, opt.bestItem = rank, nil, id
         opt.icon = ItemIcon(id) or opt.icon
       end
     end
   end
+end
+
+-- A weapon enchant reminder: a click casts the enchant, or uses the item on that weapon.
+local function WeaponEntry(slot, opt)
+  local e = { id = "Upkeep.weapon" .. slot, icon = opt.icon or "Interface/Icons/INV_Misc_QuestionMark" }
+  if opt.bestSpell then
+    e.spell = opt.bestSpell
+    e.click = { type = "spell", spell = opt.bestSpell }
+  elseif opt.bestItem then
+    e.item = opt.bestItem
+    e.click = { type = "macro", macrotext = "/use item:" .. opt.bestItem .. "\n/use " .. slot }
+  end
+  return e
 end
 
 -- Whether a slot holds something that can be enchanted: the main hand always, the off
@@ -920,7 +1029,7 @@ local function ReadWeapon(slot)
   end
 end
 
--- Adds an icon to out for each weapon whose enchant is missing or outranked, main hand
+-- Adds a reminder to out for each weapon whose enchant is missing or outranked, main hand
 -- first.
 local function WeaponReminders(out)
   local available
@@ -953,7 +1062,7 @@ local function WeaponReminders(out)
             pick = lastWeaponOption
           end
           pick = pick or available
-          out[#out + 1] = weaponOptions[pick].icon or "Interface/Icons/INV_Misc_QuestionMark"
+          out[#out + 1] = WeaponEntry(slot, weaponOptions[pick])
         end
       end
     end
@@ -1036,22 +1145,8 @@ local function ReadSelfBuffs()
   end
 end
 
--- Adds the icon of every entry that is missing or outranked to out, in table order.
--- A clickable entry's button: shown with the spell to cast while pick is set, else removed.
-local clickableShown = {}  -- entry -> spell id its button casts, while it's up
-
-local function ShowClickable(e, i, pick)
-  local id = pick and e.spells[pick][e.known[pick]]
-  if clickableShown[e] == id then return end
-  clickableShown[e] = id
-  local key = "Upkeep.selfbuff" .. i
-  if id then
-    Upkeep.AddReminder(key, { icon = e.icons[pick], click = { type = "spell", spell = id }, spell = id })
-  else
-    Upkeep.RemoveReminder(key)
-  end
-end
-
+-- Adds a reminder to out for every entry that is missing or outranked, in table order. A
+-- click casts your best rank of the spell it suggests.
 local function SelfBuffReminders(out)
   ReadSelfBuffs()
   local now = GetTime()
@@ -1079,24 +1174,34 @@ local function SelfBuffReminders(out)
         end
       end
     end
-    if e.spells.clickable then
-      ShowClickable(e, i, pick)
-    elseif pick then
-      out[#out + 1] = e.icons[pick]
+    if pick then
+      local spell = e.spells[pick][e.known[pick]]
+      out[#out + 1] = {
+        id = "Upkeep.selfbuff" .. i, icon = e.icons[pick], spell = spell,
+        click = { type = "spell", spell = spell },
+      }
     end
   end
 end
 
--- Right to left from the seal bar's corner: blessings, weapon enchants, self buffs.
+local selfOwned, selfWanted, selfPending = {}, {}, {}
+
+local function Pulse()
+  return 0.4 + 0.6 * math.abs(math.sin(GetTime() * math.pi * 1.5))
+end
+
+-- Blessing, weapon enchants, self buffs, in the order they first came up.
 local function UpdateSelf()
-  wipe(selfTextures)
+  wipe(selfWanted)
   if isPaladin then
-    selfTextures[#selfTextures + 1] = BlessingReminder()
+    selfWanted[#selfWanted + 1] = BlessingReminder()
   end
-  WeaponReminders(selfTextures)
-  SelfBuffReminders(selfTextures)
-  DrawSelf()
-  DrawApi()
+  WeaponReminders(selfWanted)
+  SelfBuffReminders(selfWanted)
+  Sync(selfRow, selfOwned, selfWanted)
+  local combat, pulse = UnitAffectingCombat("player"), Pulse()
+  DrawPlainRow(selfPlain, Pending(selfRow, selfPending), combat, pulse)
+  DrawRow(selfRow, combat, pulse)
 end
 
 --------------------------------------------------------------------------------
@@ -1106,53 +1211,68 @@ end
 
 local TARGET_X, TARGET_Y = 23, -22  -- from the target frame's top-left corner
 
-local targetPanel = CreateFrame("Frame", nil, UIParent)
-targetPanel:SetSize(ICON_SIZE, ICON_SIZE)
-targetPanel:Hide()
+-- The buttons are children of the target frame, so they go when it does, even in combat.
+-- Nothing on a target is readable in combat, and targets change too often to carry an old
+-- reading forward, so a secure state driver hides the row in combat.
+local targetRow = NewButtonRow(TargetFrame or UIParent, 1)
+local targetPlain = NewPlainRow(1)
 
-local targetIcons = {}
-local targetAuras, targetList = {}, {}
-
--- Anchored by its bottom-left corner to the target frame, so the row grows rightwards
--- as icons are added and follows the target frame wherever the client lays it out.
-local function PlaceTargetPanel()
-  targetPanel:ClearAllPoints()
+-- Anchored by the bottom-left corner to the target frame, so the row grows rightwards and
+-- follows the target frame wherever the client lays it out. Out of combat only.
+local function TargetAnchor(frame, shift)
+  frame:ClearAllPoints()
   if TargetFrame then
-    targetPanel:SetPoint("BOTTOMLEFT", TargetFrame, "TOPLEFT", TARGET_X, TARGET_Y)
+    frame:SetPoint("BOTTOMLEFT", TargetFrame, "TOPLEFT", TARGET_X + shift, TARGET_Y)
   else
-    targetPanel:SetPoint("CENTER", 0, -120)
+    frame:SetPoint("CENTER", UIParent, "CENTER", shift, -120)
   end
 end
 
+-- Plain icons start after the buttons.
+local function ShiftTargetPlain()
+  TargetAnchor(targetPlain.panel, targetRow.shown * (ICON_SIZE + ICON_GAP))
+end
+targetRow.onLayout = ShiftTargetPlain
+
+local function PlaceTargetRow()
+  TargetAnchor(targetRow.panel, 0)
+  if TargetFrame then
+    targetRow.panel:SetFrameLevel(TargetFrame:GetFrameLevel() + 20)
+  end
+  if not targetRow.driven then
+    targetRow.driven = true
+    RegisterStateDriver(targetRow.panel, "visibility", "[combat] hide; show")
+  end
+  ShiftTargetPlain()
+end
+targetRow.place = PlaceTargetRow
+
+local targetOwned, targetWanted, targetPending = {}, {}, {}
+local targetAuras, targetList = {}, {}
+
+-- One reminder per blessing you could still usefully cast on your target, in full colour;
+-- a click casts it on them. Duration is ignored; the question is only whether a cast of
+-- yours would add anything.
 local function UpdateTarget()
-  local shown = 0
+  wipe(targetWanted)
   if isPaladin and #known > 0 and UnitExists("target")
     and not UnitIsDead("target") and not UnitIsUnit("target", "player") then
     local okA, assist = pcall(UnitCanAssist, "player", "target")
     if okA and assist then
-      -- Nothing is readable in combat, and a target changes too often to carry an old
-      -- reading forward, so the row stays empty until combat ends.
       local ok, auras, readable = pcall(ReadBlessings, "target", targetAuras)
       if ok and AurasTrusted(readable, "target") then
-        local list = Castable(auras, targetList)
-        for i, key in ipairs(list) do
-          local t = MakeIcon(targetPanel, targetIcons, i, 1)
-          t.icon:SetTexture(IconFor(key))
-          t.icon:SetDesaturated(false)  -- casts you could make, not a gap
-          t.icon:SetAlpha(0.9)
-          t:Show()
-          shown = i
+        for _, key in ipairs(Castable(auras, targetList)) do
+          local e = BlessingEntry("Upkeep.target." .. key, key, "target")
+          e.desaturate, e.glow = false, false  -- casts you could make, not a gap
+          targetWanted[#targetWanted + 1] = e
         end
       end
     end
   end
-  for i = shown + 1, #targetIcons do targetIcons[i]:Hide() end
-  if shown == 0 then
-    targetPanel:Hide()
-    return
-  end
-  targetPanel:SetWidth(shown * ICON_SIZE + (shown - 1) * ICON_GAP)
-  targetPanel:Show()
+  Sync(targetRow, targetOwned, targetWanted)
+  local combat, pulse = UnitAffectingCombat("player"), Pulse()
+  DrawPlainRow(targetPlain, Pending(targetRow, targetPending), combat, pulse)
+  DrawRow(targetRow, combat, pulse)
 end
 
 --------------------------------------------------------------------------------
@@ -1284,10 +1404,12 @@ local function Debug()
       tostring(st and st.rank),
       st and st.exp and string.format("%.0fs", st.exp - GetTime()) or "nil"))
   end
-  for _, id in ipairs(apiOrder) do
-    local r = apiReminders[id]
-    print(string.format("Upkeep: reminder %s from another addon%s%s", id, r.click and ", clickable" or "",
-      r.removed and ", going when combat ends" or ""))
+  for _, row in ipairs(buttonRows) do
+    for _, id in ipairs(row.order) do
+      local e = row.entries[id]
+      print(string.format("Upkeep: reminder %s%s%s%s", id, e.click and ", clickable" or "",
+        e.laidOut and "" or ", a button after combat", e.removed and ", going when combat ends" or ""))
+    end
   end
 end
 
@@ -1309,13 +1431,22 @@ local sentCasts = {}
 events:SetScript("OnEvent", function(_, event, a1, a2, a3)
   if event == "PLAYER_LOGIN" then
     PlaceBar()
-    PlaceApiPanel()
-    PlaceTargetPanel()
+    -- Place the button rows now the bar has its size (held back if in combat).
+    for _, row in ipairs(buttonRows) do
+      row.placed = false
+      LayoutRow(row)
+    end
     SeedKnown()
     SeedWeaponEnchants()
     SeedSelfBuffs()
   elseif event == "PLAYER_REGEN_ENABLED" then
-    if apiDirty then LayoutApi() end
+    for _, row in ipairs(buttonRows) do
+      if row.dirty then LayoutRow(row) end
+    end
+    -- Redraw in the same frame, so a plain icon hides as its button takes its place
+    -- rather than showing beside it until the next refresh.
+    UpdateSelf()
+    UpdateTarget()
   elseif event == "BAG_UPDATE_DELAYED" then
     SeedWeaponEnchants()
   elseif event == "SPELLS_CHANGED" then
