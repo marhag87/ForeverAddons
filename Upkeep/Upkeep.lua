@@ -730,18 +730,18 @@ end
 --------------------------------------------------------------------------------
 -- On you: reminders beside the seal bar for whatever of yours is missing - a blessing
 -- on a Paladin, and any weapon enchant or buff listed for your class - plus reminders
--- other addons add through Upkeep.AddReminder. Buttons sit in the seal bar's corner,
--- plain icons to their left.
+-- other addons add through Upkeep.AddReminder. They run rightwards along the top of the
+-- seal bar from its top-left corner: buttons first, plain icons after them.
 --------------------------------------------------------------------------------
 
-local selfRow = NewButtonRow(UIParent, -1)
-local selfPlain = NewPlainRow(-1)
+local selfRow = NewButtonRow(UIParent, 1)
+local selfPlain = NewPlainRow(1)
 
 -- Plain icons start after the buttons.
 local function ShiftSelfPlain()
   local shift = selfRow.shown * (ICON_SIZE + ICON_GAP)
   selfPlain.panel:ClearAllPoints()
-  selfPlain.panel:SetPoint("BOTTOMRIGHT", bar, "TOPLEFT", -2 - shift, 2)
+  selfPlain.panel:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", shift, 2)
 end
 selfRow.onLayout = ShiftSelfPlain
 ShiftSelfPlain()
@@ -755,9 +755,9 @@ local function PlaceSelfRow()
   local hbWidth = hb and hb:GetWidth()
   local w, h = bar:GetWidth(), bar:GetHeight()
   if hbWidth and hbWidth > 0 then
-    panel:SetPoint("BOTTOMRIGHT", hb, "TOP", -w / 2 - 2, BAR_GAP + h + 2)
+    panel:SetPoint("BOTTOMLEFT", hb, "TOP", -w / 2, BAR_GAP + h + 2)
   else
-    panel:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -w / 2 - 2, BAR_FALLBACK_Y + h / 2 + 2)
+    panel:SetPoint("BOTTOMLEFT", UIParent, "CENTER", -w / 2, BAR_FALLBACK_Y + h / 2 + 2)
   end
 end
 selfRow.place = PlaceSelfRow
