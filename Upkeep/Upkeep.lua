@@ -448,6 +448,11 @@ local function AddIconArt(t)
   t.glow:SetSize(ICON_SIZE * 1.4, ICON_SIZE * 1.4)
   t.glow:SetBlendMode("ADD")
   t.glow:Hide()
+  -- How many you carry, for an item that stacks, as on an action button.
+  t.count = t:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+  t.count:SetDrawLayer("OVERLAY", 7)
+  t.count:SetPoint("BOTTOMRIGHT", t, "BOTTOMRIGHT", -1, 1)
+  t.count:SetJustifyH("RIGHT")
 end
 
 local function MakeIcon(parent, list, i, dir)
@@ -515,10 +520,52 @@ local function HideTooltip()
   GameTooltip:Hide()
 end
 
+local function ItemCount(id)
+  local f = (C_Item and C_Item.GetItemCount) or GetItemCount
+  if not f then return 0 end
+  local ok, n = pcall(f, id)
+  if ok and not isSecret(n) and type(n) == "number" then return n end
+  return 0
+end
+
+-- Whether an item stacks, so its count is worth showing: food, lures and poisons do, a
+-- sleeping bag does not. Nil until the game has loaded the item.
+local stacksOf = {}
+
+local function Stacks(id)
+  if stacksOf[id] == nil then
+    local size
+    local f = C_Item and C_Item.GetItemMaxStackSizeByID
+    if f then
+      local ok, n = pcall(f, id)
+      if ok and not isSecret(n) and type(n) == "number" then size = n end
+    end
+    local info = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    if not size and info then
+      local ok, _, _, _, _, _, _, _, n = pcall(info, id)
+      if ok and not isSecret(n) and type(n) == "number" then size = n end
+    end
+    if size then stacksOf[id] = size > 1 end
+  end
+  return stacksOf[id]
+end
+
+local function CountText(e)
+  if not (e.item and Stacks(e.item)) then return "" end
+  local n = ItemCount(e.item)
+  return n > 9999 and "*" or tostring(n)
+end
+
 -- Greyed, and glowing in combat, for something missing; in full colour and unlit for
 -- something you could do (desaturate = false). Dimmed while it waits to go.
 local function Style(t, e, combat, pulse, dimmed)
   t.icon:SetTexture(e.icon)
+  local count = CountText(e)
+  if t.countText ~= count then
+    t.countText = count
+    t.count:SetText(count)
+  end
+  t.count:SetAlpha(dimmed and 0.25 or 1)
   if not e.desaturate then
     t.icon:SetDesaturated(false)
     t.icon:SetAlpha(dimmed and 0.25 or 0.9)
@@ -793,7 +840,8 @@ selfRow.place = PlaceSelfRow
 -- info.icon:       texture path or file id.
 -- info.click:      secure action attributes for a click, e.g. { type = "spell", spell = 71 }
 --                  or { type = "focus", unit = "party1" }. Without it a click does nothing.
--- info.item:       an item id; mouseover shows that item's own tooltip.
+-- info.item:       an item id; mouseover shows that item's own tooltip, and if it stacks
+--                  the icon shows how many you carry.
 -- info.spell:      a spell id; mouseover shows that spell's own tooltip.
 -- info.tooltip:    text shown on mouseover, when neither item nor spell is given.
 -- info.glow:       false to stay unlit in combat.
@@ -873,14 +921,6 @@ end
 local weaponState = {}  -- slot -> { option, rank, exp } if enchanted, false if not, nil before a reading
 local weaponLast = {}   -- slot -> the option last seen on that weapon
 local lastWeaponOption  -- the option last cast, for a weapon that has shown none yet
-
-local function ItemCount(id)
-  local f = (C_Item and C_Item.GetItemCount) or GetItemCount
-  if not f then return 0 end
-  local ok, n = pcall(f, id)
-  if ok and not isSecret(n) and type(n) == "number" then return n end
-  return 0
-end
 
 local function ItemIcon(id)
   local f = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
