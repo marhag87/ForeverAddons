@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Available Quests Map
 ## Notes: Shows a ! on the world map where you can pick up quests, and lists a quest giver's quests in their tooltip. Data from QuestieDB.
-## Version: 1.0.0
+## Version: 1.0.1
 ## Category: Quests
 ## Dependencies: QuestieDB
 ## SavedVariables: AvailableQuestsMapDB

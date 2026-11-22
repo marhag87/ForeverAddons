@@ -245,8 +245,25 @@ local function ShowingContinent()
   return info ~= nil and Enum.UIMapType ~= nil and info.mapType == Enum.UIMapType.Continent
 end
 
+-- An icon belongs on the map: on one of HereBeDragons' map pins, or on a map addon's own
+-- layer. Off the map its parent is UIParent, and there it has to stay hidden. OpenMap, in
+-- combat, moves every icon onto a view of its own, even ones of other zones that sit on
+-- UIParent; as the map closes it gives each back to its parent shown, which left a "!" in
+-- the middle of the screen.
+local function OffMap(self)
+  return self:GetParent() == UIParent
+end
+
+local function Icon_AfterShow(self)
+  if OffMap(self) then self:Hide() end
+end
+
 -- HereBeDragons hides and re-shows every icon when the map changes, so this runs per map.
 local function Icon_OnShow(self)
+  if OffMap(self) then
+    self:Hide()
+    return
+  end
   self:SetScale(ShowingContinent() and CONTINENT_SCALE or 1)
 end
 
@@ -275,6 +292,8 @@ local function AcquireIcon()
     icon:SetScript("OnEnter", Icon_OnEnter)
     icon:SetScript("OnLeave", Icon_OnLeave)
     icon:SetScript("OnShow", Icon_OnShow)
+    -- (OnShow alone misses a Show on an icon that was shown already, as OpenMap's is)
+    hooksecurefunc(icon, "Show", Icon_AfterShow)
     icon:Hide() -- HereBeDragons shows it once its map is displayed
   end
   usedIcons[#usedIcons + 1] = icon
