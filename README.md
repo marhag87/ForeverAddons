@@ -1,6 +1,6 @@
 # ForeverAddons
 
-Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is one addon.
+Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is one addon, apart from `docs` (notes for working on the code, with [CLAUDE.md](CLAUDE.md)) and `tests` (mock tests run outside the game).
 
 | Addon | What it does |
 | --- | --- |
