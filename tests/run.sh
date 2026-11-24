@@ -17,6 +17,7 @@ for t in upkeep_test upkeep_food_test upkeep_bag_test upkeep_shaman_test upkeep_
 done
 run upkeep_count_test Upkeep/Upkeep.lua info
 run upkeep_loading_test Upkeep/Upkeep.lua nocache
+run upkeep_loading_test Upkeep/Upkeep.lua nospell
 run tq_test TrinketQueue/TrinketQueue.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua onshow

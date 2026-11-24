@@ -1,8 +1,10 @@
 clock = 0
 -- Food whose use spell hasn't loaded at login: its tooltip has no "Use:" line yet, so
--- Upkeep must look again rather than decide it gives no experience.
-local path, withCacheApi = ...
-withCacheApi = withCacheApi ~= "nocache"
+-- Upkeep must look again rather than decide it gives no experience. Modes: "nocache" has no
+-- C_Spell.IsSpellDataCached; "nospell" has GetItemSpell name no spell until it has loaded.
+local path, mode = ...
+local withCacheApi = mode ~= "nocache"
+local spellKnownEarly = mode ~= "nospell"
 
 local M
 M = setmetatable({}, { __index = function() return M end, __call = function() return nil end })
@@ -32,15 +34,22 @@ local function NewFrame(kind, name, parent, template)
   return f
 end
 
-local TROUT, REDGILL, BANDAGE = 8364, 13930, 14529
-local SPELL = { [TROUT] = 18233, [REDGILL] = 18234, [BANDAGE] = 18610 }
+local TROUT, REDGILL, BANDAGE, RAPTOR = 8364, 13930, 14529, 990001  -- the raptor's id is made up
+local SPELL = { [TROUT] = 18233, [REDGILL] = 18234, [BANDAGE] = 18610, [RAPTOR] = 990002 }
 local DESC = {
   [18233] = "Restores 874 health over 27 sec. Must remain seated while eating. If you spend at least 10 sec eating, you will become well fed and gain 5% experience gained from kills.",
   [18234] = "Restores 1,338 health over 30 sec. If you spend at least 10 sec eating, you will become well fed and gain 18 Fishing Skill for 15 min. Additionally, experience gained from kills is increased by 5%.",
   [18610] = "Heals 2000 damage over 8 sec.",
+  [990002] = "Restores 874 health over 27 sec. If you spend at least 10 sec eating, you will become well fed and gain 10 Stamina for 15 min. Additionally, experience gained from kills is increased by 5%.",
 }
-local NAME = { [TROUT] = "Mithril Head Trout", [REDGILL] = "Filet of Redgill", [BANDAGE] = "Runecloth Bandage" }
+local NAME = { [TROUT] = "Mithril Head Trout", [REDGILL] = "Filet of Redgill", [BANDAGE] = "Runecloth Bandage",
+  [RAPTOR] = "Twice-Spiced Raptor Slice" }
 local loaded = {}       -- spell id -> true once loaded
+local partial = {}      -- spell id -> true while its text reads without the bonus
+local function Desc(spell)
+  if not loaded[spell] then return "" end
+  return partial[spell] and DESC[spell]:match("^[^.]*%.") or DESC[spell]
+end
 local requested = {}    -- spell ids asked for
 local timers = {}
 
@@ -48,7 +57,7 @@ local bagItems = { TROUT, REDGILL, BANDAGE }
 local function Tooltip(id)
   local lines = { { leftText = NAME[id] } }
   -- The "Use:" line only once the spell has loaded.
-  if loaded[SPELL[id]] then lines[#lines + 1] = { leftText = "Use: " .. DESC[SPELL[id]] .. " (1 Sec Cooldown)" } end
+  if loaded[SPELL[id]] then lines[#lines + 1] = { leftText = "Use: " .. Desc(SPELL[id]) .. " (1 Sec Cooldown)" } end
   lines[#lines + 1] = { leftText = "Requires Level 35" }
   lines[#lines + 1] = { leftText = "Sell Price:" }
   return { lines = lines }
@@ -58,7 +67,7 @@ local C_Spell = {
   GetSpellName = function(id) return ({ [6673] = "Battle Shout" })[id] end,
   GetSpellTexture = function(id) return id end,
   RequestLoadSpellData = function(id) requested[#requested + 1] = id end,
-  GetSpellDescription = function(id) return loaded[id] and DESC[id] or "" end,
+  GetSpellDescription = Desc,
 }
 if withCacheApi then C_Spell.IsSpellDataCached = function(id) return loaded[id] == true end end
 
@@ -83,7 +92,9 @@ local env = setmetatable({
   C_Item = {
     GetItemInfoInstant = function(id) return id, nil, nil, nil, nil, 0 end,
     IsItemDataCachedByID = function() return true end,
-    GetItemSpell = function(id) return "Food", SPELL[id] end,
+    GetItemSpell = function(id)
+      if spellKnownEarly or loaded[SPELL[id]] then return "Food", SPELL[id] end
+    end,
     IsUsableItem = function() return true end, GetItemInfo = function(id) return nil, nil, nil, 35 end,
     GetItemCount = function() return 9 end, GetItemIconByID = function(id) return id end,
     GetItemNameByID = function(id) return NAME[id] end,
@@ -130,9 +141,9 @@ local function RunTimers()
   timers = {}
   for _, fn in ipairs(due) do fn() end
 end
-local function FoodButton()
+local function FoodButton(id)
   for _, b in ipairs(buttons) do
-    if b.shown and b.attrs.type == "item" and b.attrs.item == "item:" .. TROUT then return true end
+    if b.shown and b.attrs.type == "item" and b.attrs.item == "item:" .. (id or TROUT) then return true end
   end
   return false
 end
@@ -145,7 +156,7 @@ Fire("PLAYER_LOGIN")
 Tick()
 Expect("no trout reminder while its spell is loading", not FoodButton())
 Expect("asked for the trout's spell (or will look again)", #timers == 1)
-if withCacheApi then
+if withCacheApi and spellKnownEarly then
   local asked = false
   for _, id in ipairs(requested) do if id == SPELL[TROUT] then asked = true end end
   Expect("requested the trout's spell data", asked)
@@ -167,4 +178,15 @@ Expect("trout reminder still there after a bag update", FoodButton())
 for _, b in ipairs(buttons) do
   if b.shown and b.attrs.item == "item:" .. REDGILL then Expect("redgill never offered", false) end
 end
+
+-- Food first read without its bonus is read again at the next bag change.
+bagItems = { REDGILL, BANDAGE, RAPTOR }
+loaded[SPELL[RAPTOR]], partial[SPELL[RAPTOR]] = true, true
+Fire("BAG_UPDATE_DELAYED")
+Tick()
+Expect("no raptor reminder while its text lacks the bonus", not FoodButton(RAPTOR))
+partial[SPELL[RAPTOR]] = nil
+Fire("BAG_UPDATE_DELAYED")
+Tick()
+Expect("raptor reminder after the next bag change", FoodButton(RAPTOR))
 print(failed and "FAILED" or "ok")

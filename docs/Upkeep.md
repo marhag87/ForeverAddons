@@ -3,7 +3,7 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 
 ## Files
 - `Upkeep.lua`: the whole addon. Config tables at the top: `SELF_BUFFS` (per class token, plus `ALL`), `WEAPON_ENCHANTS` (per class, only `SHAMAN` filled in), `BLESSING_SPELLS`, `UTILITY_BLESSINGS`. Sections in order: seal bar (`UpdateSeal`, `PlaceBar`), blessings (`ReadBlessings`, `Castable`), button rows (`NewButtonRow`, `LayoutRow`, `RowAdd`/`RowRemove`, `Sync`, `DrawPlainRow`, `Style`), public API, own reminders (`BlessingReminder`, `WeaponReminders`, `SelfBuffReminders`, `XPReminders`, called from `UpdateSelf`), target row (`UpdateTarget`), driver (`OnCast`, `Every`, `Debug`, event frame).
-- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting, counts and late-loading food.
+- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change).
 
 ## How it works
 - Polling: `Every(0.05, UpdateSeal)`, `Every(0.1, UpdateSelf)`, `Every(0.1, UpdateTarget)`. Each runs on its own OnUpdate frame, so an error in one can't stop the others.
@@ -43,8 +43,8 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 - `AurasTrusted`: in combat, no scan is believed. Out of combat, a scan of your own buffs is believed only if it read as many as `BuffFrame` shows (`ShownBuffCount`).
 - `GetWeaponEnchantInfo` reports no enchant on this client. Enchants come from lines on the weapon's tooltip (`TooltipEnchant`; `RankAfterName` reads "2", "II" or nothing). In combat they come from `BuffFrame`'s TempEnchant buttons (`EnchantButton`), which can't tell your enchant from a whetstone. `OnCast` assumes an enchant lands on the main hand.
 - `UNIT_SPELLCAST_SUCCEEDED` for "player" also brings other players' seal casts and procs such as Seal of Command's hit (20424). Keep the `sentCasts` filter.
-- English text is matched in several places: "Seal of", "Blessing of", enchant prefixes, "xperience", "Fishing Skill", "Well Fed", "Well-Rested", "Cozy Sleeping Bag", and times such as "(N min)".
-- Food text loads in the background. `UseText` asks for the item and spell data and returns false until it's there; `SeedXP` looks again every 3 s, up to `XP_RETRIES` (5) times. Then `xpFoodOf` caches the verdict per item for the session. Before 2.18, a read that came too early marked a food as giving no experience for the whole session.
+- English text is matched in several places: "Seal of", "Blessing of", enchant prefixes, "xperience", "Use:", "Fishing Skill", "Well Fed", "Well-Rested", "Cozy Sleeping Bag", and times such as "(N min)".
+- Food text loads in the background. `UseText` asks for the item and spell data and returns false until it's there. `GetItemSpell` can also return nothing for a cached item whose spell hasn't loaded, so `XPVerdict` doesn't judge food that has neither a description nor a "Use:" line. `SeedXP` looks again every 3 s, up to `XP_RETRIES` (5) times. `xpFoodOf` keeps a yes for the session; a no is read again at every look (each bag change). Before 2.19, a too-early read marked food as giving no experience for the session (seen on a Shaman at 59).
 - Counts show only for items that stack (`Stacks`, which is nil until the item loads), and as "*" above 9999.
 
 ## Open

@@ -1285,6 +1285,7 @@ end
 
 local XP_TEXT = "xperience"  -- "Experience ..." or "... experience gained from kills ..."
 local FISHING_FOOD_TEXT = "Fishing Skill"  -- food such as Filet of Redgill, kept for fishing
+local USE_TEXT = "Use:"       -- starts the tooltip line with the use spell's description
 local FOOD_BUFF = "Well Fed"
 local SLEEPING_BAG = "Cozy Sleeping Bag"
 local BAG_BUFF = "Well-Rested"
@@ -1294,7 +1295,7 @@ local XP_CHECK = 1           -- seconds between looks at your buffs
 local XP_RETRIES = 5         -- times to look again for items still loading
 local ITEM_CLASS_CONSUMABLE = Enum and Enum.ItemClass and Enum.ItemClass.Consumable or 0
 
-local xpFoodOf = {}     -- item id -> true if its text promises experience, false if not
+local xpFoodOf = {}     -- item id -> true if its text promises experience, false if not (yet)
 local xpFoods = {}      -- item ids of such food in your bags
 local consumables = {}  -- item ids of every consumable in your bags, for /upkeep debug
 local sleepingBag       -- item id of a sleeping bag in your bags
@@ -1334,6 +1335,23 @@ local function UseText(id)
   return true, desc
 end
 
+-- Whether a consumable's text promises experience: true or false, or nil while its text
+-- is still loading. Food whose use spell hasn't loaded has no "Use:" line yet, and
+-- GetItemSpell may not name that spell yet either, so food without one isn't judged.
+-- Fishing food is kept for fishing, whatever else it gives.
+local function XPVerdict(id, bag, slot)
+  local ready, desc = UseText(id)
+  if not ready then return nil end
+  local ok, data = pcall(C_TooltipInfo.GetBagItem, bag, slot)
+  if not (ok and data and data.lines) then return nil end
+  if desc == "" then desc = nil end
+  if desc == nil and not TooltipSays(data, USE_TEXT) then return nil end
+  local function Says(text)
+    return TooltipSays(data, text) or (desc ~= nil and desc:find(text, 1, true) ~= nil)
+  end
+  return Says(XP_TEXT) and not Says(FISHING_FOOD_TEXT)
+end
+
 local function MaxLevel()
   local ok, cap = pcall(GetMaxLevelForPlayerExpansion)
   if ok and type(cap) == "number" and cap > 0 then return cap end
@@ -1364,18 +1382,11 @@ local function SeedXP(retry)
         end
         if select(6, getInfo(id)) == ITEM_CLASS_CONSUMABLE then
           consumables[#consumables + 1] = id
-          if xpFoodOf[id] == nil then
-            local ready, desc = UseText(id)
-            local ok, data = pcall(C_TooltipInfo.GetBagItem, bag, slot)
-            if ready and ok and data and data.lines and #data.lines > 1 then
-              local function Says(text)
-                return TooltipSays(data, text) or (desc ~= nil and desc:find(text, 1, true) ~= nil)
-              end
-              -- Fishing food is kept for fishing, whatever else it gives.
-              xpFoodOf[id] = Says(XP_TEXT) and not Says(FISHING_FOOD_TEXT)
-            else
-              loading = true
-            end
+          -- A yes holds for the session. A no is read again at each look, in case it
+          -- was read before all of the text had loaded.
+          if not xpFoodOf[id] then
+            local verdict = XPVerdict(id, bag, slot)
+            if verdict == nil then loading = true else xpFoodOf[id] = verdict end
           end
           if xpFoodOf[id] then xpFoods[#xpFoods + 1] = id end
         end
