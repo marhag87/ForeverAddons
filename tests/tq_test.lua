@@ -246,15 +246,45 @@ buttonFrame.mouseOver = true
 Fire("GLOBAL_MOUSE_DOWN", "LeftButton")
 print("click on the flyout, flyout", flyout.shown and "open" or "closed")
 buttonFrame.mouseOver = false
-s14.arrow.mouseOver = true
-Fire("GLOBAL_MOUSE_DOWN", "LeftButton")
-print("click on an arrow, flyout", flyout.shown and "open" or "closed")
-s14.arrow.mouseOver = false
 Fire("GLOBAL_MOUSE_DOWN", "LeftButton")
 print("click elsewhere, flyout", flyout.shown and "open" or "closed", "listening", tostring(flyout.events.GLOBAL_MOUSE_DOWN))
 s13.arrow.scripts.OnClick(s13.arrow)
 print("arrow again, flyout", flyout.shown and "open" or "closed")
 s13.arrow.scripts.OnClick(s13.arrow)
+
+-- The arrow shows on hover only, as the totem bar's (asserted).
+local function Expect(label, cond)
+  print((cond and "PASS " or "FAIL ") .. label)
+  if not cond then failed = true end
+end
+Expect("arrows hidden at rest", not s13.arrow.shown and not s14.arrow.shown)
+s13.mouseOver = true
+s13.scripts.OnEnter(s13)
+Expect("hovering slot 13 shows its arrow only", s13.arrow.shown and not s14.arrow.shown)
+s13.mouseOver, s13.arrow.mouseOver = false, true
+s13.scripts.OnLeave(s13)
+Expect("moving onto the arrow keeps it", s13.arrow.shown)
+s13.arrow.mouseOver = false
+s13.arrow.scripts.OnLeave(s13.arrow)
+Expect("leaving both hides it", not s13.arrow.shown)
+s13.mouseOver = true
+s13.scripts.OnEnter(s13)
+s13.arrow.scripts.OnClick(s13.arrow)
+Expect("opening the flyout hides the slot's arrow", flyout.shown and not s13.arrow.shown)
+s13.scripts.OnEnter(s13)
+Expect("hovering the open slot doesn't bring its arrow back", not s13.arrow.shown)
+s13.mouseOver = false
+s13.scripts.OnLeave(s13)
+s14.mouseOver = true
+s14.scripts.OnEnter(s14)
+Expect("another slot's arrow still shows", s14.arrow.shown)
+s14.arrow.scripts.OnClick(s14.arrow)
+Expect("opening 14's flyout: neither slot arrow shows", flyout.shown and not s13.arrow.shown and not s14.arrow.shown)
+flyout:Hide()
+Expect("closed with the mouse on slot 14: its arrow is back", s14.arrow.shown)
+s14.mouseOver = false
+s14.scripts.OnLeave(s14)
+Expect("then leaving hides it", not s14.arrow.shown)
 
 -- Moving: only with Shift.
 s13.scripts.OnDragStart(s13)
@@ -268,4 +298,4 @@ print("shift-drag saved:", env.TrinketQueueDB.x, env.TrinketQueueDB.y)
 equipped[13], equipped[14], bags = nil, nil, { [0] = {} }
 Fire("BAG_UPDATE_DELAYED")
 print("no trinkets, frame shown:", tostring(s13:GetParent():IsShown()))
-print("ok")
+print(failed and "FAILED" or "ok")

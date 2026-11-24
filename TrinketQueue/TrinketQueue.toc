@@ -2,7 +2,7 @@
 ## Title: TrinketQueue
 ## Notes: Your two trinket slots in a frame of their own, drawn like the character sheet's. A click or a key binding uses a trinket. The arrow above a slot lists the trinkets in your bags; the one you pick goes on as soon as you're out of combat, and a right-click on the slot drops it. Shift-drag to move.
 ## Author: Martin
-## Version: 1.0.1
+## Version: 1.1
 ## IconTexture: Interface\PaperDoll\UI-PaperDoll-Slot-Trinket
 ## SavedVariables: TrinketQueueDB
 

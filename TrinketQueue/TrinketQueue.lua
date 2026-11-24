@@ -1,22 +1,21 @@
 -- TrinketQueue
 --
--- Your two trinket slots in a small frame of their own, drawn as the character sheet draws its
--- slots. A click on a slot, or its key binding, uses that trinket. The arrow above a slot opens
--- the character sheet's flyout with the trinkets in your bags; the one you pick goes on as soon
--- as you're out of combat - at once if you are - and waits in the slot's corner till then. A
--- right-click on the slot drops it. Shift-drag moves the frame.
+-- Your two trinket slots in a small frame of their own. A click on a slot, or its key binding,
+-- uses that trinket. Hovering a slot shows an arrow above it, which opens the character sheet's
+-- flyout with the trinkets in your bags; the one you pick goes on as soon as you're out of
+-- combat - at once if you are - and waits in the slot's corner till then. A right-click on the
+-- slot drops it. Shift-drag moves the frame.
 --
--- The art and the flyout's layout are Blizzard's (PaperDollFrame.xml, EquipmentFlyout.lua),
--- copied rather than called, so nothing of the character sheet's is touched.
+-- The arrow and the flyout's layout are Blizzard's (PaperDollFrame.xml, EquipmentFlyout.lua),
+-- and the arrow shows on hover as the totem bar's does (MultiCastActionBarFrame.lua). All of it
+-- is copied rather than called, so nothing of Blizzard's is touched.
 
 local SLOTS = { 13, 14 }  -- left, right: the character sheet's upper and lower trinket
 local SLOT_NAME = { [13] = "Trinket0Slot", [14] = "Trinket1Slot" }
 
 local SLOT_SIZE = 37
-local SLOT_GAP = 6        -- between the slots, as between the character sheet's weapons
+local SLOT_GAP = 3        -- between the slots (their arrows are wider, but only one shows at a time)
 local ARROW_W, ARROW_H = 43, 20
-local ARROW_GAP = 5       -- between a slot and its arrow
-local MARGIN = 6          -- room for the slots' frames inside the movable frame
 local TICK = 0.25         -- seconds between looks at a waiting trinket
 local RETRY_AFTER = 1.5   -- seconds a swap gets to happen before it's tried again
 local MAX_TRIES = 3       -- then the game won't have it (a unique one, a declined bind prompt): dropped
@@ -174,7 +173,10 @@ end
 --------------------------------------------------------------------------------
 
 local holder = CreateFrame("Frame", nil, UIParent)
-holder:SetSize(SLOT_SIZE * 2 + SLOT_GAP + MARGIN * 2, SLOT_SIZE + ARROW_GAP + ARROW_H + MARGIN * 2)
+-- Below the action bars' layer, so flyouts from them (such as the totem bar's) open over
+-- the slots. Set before the slots are made, so they inherit it.
+holder:SetFrameStrata("LOW")
+holder:SetSize(SLOT_SIZE * 2 + SLOT_GAP, SLOT_SIZE)  -- the arrows show above it
 holder:SetPoint("CENTER", UIParent, "CENTER", 0, -180)
 holder:SetMovable(true)
 holder:SetClampedToScreen(true)
@@ -209,12 +211,11 @@ local function StopMove()
   SavePosition()
 end
 
--- The arrow's look, open or not (EquipmentFlyoutPopoutButton_RefreshVisualState, pointing up).
-local function ArrowLook(arrow, open)
-  local normal = open and "UI-Character-Info-Button-PullUp-Open" or "UI-Character-Info-Button-PullUp"
-  arrow:SetNormalAtlas(normal, true)
+-- The character sheet's arrow (EquipmentFlyoutPopoutButton_RefreshVisualState), pointing up.
+local function ArrowLook(arrow)
+  arrow:SetNormalAtlas("UI-Character-Info-Button-PullUp", true)
   arrow:SetPushedAtlas("UI-Character-Info-Button-PullUp-Pressed", true)
-  arrow:SetHighlightAtlas(normal, "ADD")
+  arrow:SetHighlightAtlas("UI-Character-Info-Button-PullUp", "ADD")
   arrow:SetSize(ARROW_W, ARROW_H)
 end
 
@@ -230,14 +231,24 @@ local function HideTooltip()
   GameTooltip:Hide()
 end
 
-local UpdateSlots, ToggleFlyout  -- (below)
+local UpdateSlots, ToggleFlyout, UpdateArrow  -- (below)
+
+local function SlotEnter(self)
+  ShowSlotTooltip(self)
+  UpdateArrow(self, true)
+end
+
+local function SlotLeave(self)
+  HideTooltip()
+  UpdateArrow(self)
+end
 
 local function NewSlot(invSlot, i)
   local level = holder:GetFrameLevel()
   local b = CreateFrame("ItemButton", "TrinketQueueSlot" .. invSlot, holder, "SecureActionButtonTemplate")
   b.invSlot = invSlot
   b:SetSize(SLOT_SIZE, SLOT_SIZE)
-  b:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", MARGIN + (i - 1) * (SLOT_SIZE + SLOT_GAP), MARGIN)
+  b:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT", (i - 1) * (SLOT_SIZE + SLOT_GAP), 0)
   b:SetFrameLevel(level + 3)
   -- A click uses the trinket. With key-down casting on (ActionButtonUseKeyDown) the template
   -- acts on the press, so both halves of a click have to reach it. Shift is for moving, and a
@@ -253,8 +264,8 @@ local function NewSlot(invSlot, i)
       UpdateSlots()
     end
   end)
-  b:SetScript("OnEnter", ShowSlotTooltip)
-  b:SetScript("OnLeave", HideTooltip)
+  b:SetScript("OnEnter", SlotEnter)
+  b:SetScript("OnLeave", SlotLeave)
   b:RegisterForDrag("LeftButton")
   b:SetScript("OnDragStart", StartMove)
   b:SetScript("OnDragStop", StopMove)
@@ -269,21 +280,16 @@ local function NewSlot(invSlot, i)
   b.hotkey:SetJustifyH("RIGHT")
   b.hotkey:Hide()
 
-  -- The character sheet's frame round the slot, under it.
-  local border = CreateFrame("Frame", nil, holder)
-  border:SetFrameLevel(level + 2)
-  border:SetSize(1, 1)
-  border:SetPoint("CENTER", b)
-  local art = border:CreateTexture(nil, "BACKGROUND")
-  art:SetAtlas("UI-Character-Info-GearSlot", true)
-  art:SetPoint("CENTER")
-
-  -- The arrow, under the frame as on the character sheet.
+  -- The arrow, under the slot and flush with it, so the mouse goes from one to the other
+  -- without leaving both. Shown only while hovered, and not while its flyout is open
+  -- (UpdateArrow).
   local arrow = CreateFrame("Button", nil, holder)
   arrow:SetFrameLevel(level + 1)
-  arrow:SetPoint("BOTTOM", b, "TOP", 0, ARROW_GAP)
+  arrow:SetPoint("BOTTOM", b, "TOP", 0, 0)
   arrow.slotButton = b
-  ArrowLook(arrow, false)
+  ArrowLook(arrow)
+  arrow:Hide()
+  arrow:SetScript("OnLeave", function(self) UpdateArrow(self.slotButton) end)
   arrow:SetScript("OnClick", function(self)
     if IsShiftKeyDown() then return end  -- (the end of a move)
     if PlaySound and SOUNDKIT then PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON) end
@@ -376,26 +382,17 @@ local function UpdateHotkeys()
 end
 
 --------------------------------------------------------------------------------
--- The flyout: Blizzard's (EquipmentFlyout.xml and .lua), pointing up, with only the trinkets
--- in your bags. A pick waits for the end of combat.
+-- The flyout: the trinkets in your bags, growing upwards from the slot as the totem bar's does:
+-- columns of five, a page of four columns side by side. Laid out as Blizzard's equipment
+-- flyout (EquipmentFlyout.lua) but turned upright and without its background. A pick waits for
+-- the end of combat.
 --------------------------------------------------------------------------------
 
-local FLYOUT_ART = "Interface\\PaperDollInfoFrame\\UI-GearManager-Flyout"
-local PER_ROW, ROWS = 5, 4
-local PER_PAGE = PER_ROW * ROWS
-local ITEM_SIZE, ITEM_GAP, ROW_STEP, BORDER = 37, 4, 42, 3
-
--- Blizzard's pieces of the flyout's background: texture coordinates, width, height.
-local PIECES = {
-  oneSlotLeft = { { 0, 0.09765625, 0.5546875, 0.77734375 }, 25, 54 },
-  oneSlotRight = { { 0.41796875, 0.51171875, 0.5546875, 0.77734375 }, 24, 54 },
-  rowLeft = { { 0, 0.16796875, 0.5546875, 0.77734375 }, 43, 54 },
-  rowCenter = { { 0.16796875, 0.328125, 0.5546875, 0.77734375 }, 41, 54 },
-  rowRight = { { 0.328125, 0.51171875, 0.5546875, 0.77734375 }, 47, 54 },
-  top = { { 0, 0.8359375, 0, 0.19140625 }, 214, 49 },
-  middle = { { 0, 0.8359375, 0.19140625, 0.35546875 }, 214, 42 },
-  bottom = { { 0, 0.8359375, 0.35546875, 0.546875 }, 214, 49 },
-}
+local PER_COLUMN, COLUMNS = 5, 4
+local PER_PAGE = PER_COLUMN * COLUMNS
+local ITEM_SIZE = 37
+local ITEM_GAP = SLOT_GAP  -- spaced as the slots are
+local PAGE_H = 32          -- the page turners' row
 
 local flyout = CreateFrame("Frame", "TrinketQueueFlyout", UIParent)
 flyout:SetFrameStrata("HIGH")
@@ -412,67 +409,20 @@ local buttonFrame = CreateFrame("Frame", nil, flyout)
 buttonFrame:EnableMouse(true)
 buttonFrame:SetClampedToScreen(true)
 
-local backgrounds = {}
 local itemButtons = {}
 
-local function Piece(i, name, anchor)
-  local t = backgrounds[i]
-  if not t then
-    t = buttonFrame:CreateTexture(nil, "BACKGROUND")
-    t:SetTexture(FLYOUT_ART)
-    backgrounds[i] = t
-  end
-  local piece = PIECES[name]
-  t:SetTexCoord(unpack(piece[1]))
-  t:SetSize(piece[2], piece[3])
-  t:ClearAllPoints()
-  if anchor then
-    -- (a row's next piece to the right of the last, a next row's under it)
-    t:SetPoint("TOPLEFT", anchor.frame, anchor.below and "BOTTOMLEFT" or "TOPRIGHT")
-  else
-    t:SetPoint("TOPLEFT", -5, 4)
-  end
-  t:Show()
-  return t
-end
-
--- The background for n buttons: one slot, one row, or rows (EquipmentFlyout_UpdateItems).
-local function LayBackground(n)
-  local used = 0
-  local function Add(name, after, below)
-    used = used + 1
-    return Piece(used, name, after and { frame = after, below = below })
-  end
-  if n == 1 then
-    Add("oneSlotRight", Add("oneSlotLeft"))
-  elseif n <= PER_ROW then
-    local last = Add("rowLeft")
-    for _ = 2, n - 1 do last = Add("rowCenter", last) end
-    Add("rowRight", last)
-  else
-    local last = Add("top")
-    for _ = 2, math.ceil(n / PER_ROW) - 1 do last = Add("middle", last, true) end
-    Add("bottom", last, true)
-  end
-  for i = used + 1, #backgrounds do backgrounds[i]:Hide() end
-end
-
--- More than a page: the page turners, over the buttons since the flyout opens upwards.
+-- More than a page: the page turners, on top of the columns (a full page's width).
 local nav = CreateFrame("Frame", nil, buttonFrame)
-nav:SetSize(214, 41)
-nav:SetPoint("BOTTOMLEFT", buttonFrame, "TOPLEFT", -5, 4)
+nav:SetSize(COLUMNS * ITEM_SIZE + (COLUMNS - 1) * ITEM_GAP, PAGE_H)
+nav:SetPoint("BOTTOMLEFT", buttonFrame, "TOPLEFT", 0, ITEM_GAP)
 nav:EnableMouse(true)
-local navArt = nav:CreateTexture(nil, "BACKGROUND")
-navArt:SetTexture(FLYOUT_ART)
-navArt:SetTexCoord(0, 0.8359375, 0.94921875, 0.7890625)  -- Blizzard's bottom strip, upside down
-navArt:SetAllPoints()
 
 local ShowPage  -- (below)
 
 local function PageButton(point, x, delta, art)
   local b = CreateFrame("Button", nil, nav)
   b:SetSize(32, 32)
-  b:SetPoint(point, x, -1)
+  b:SetPoint(point, x, 0)
   b:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. art .. "-Up")
   b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. art .. "-Down")
   b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. art .. "-Disabled")
@@ -483,8 +433,8 @@ local function PageButton(point, x, delta, art)
   end)
   return b
 end
-nav.prev = PageButton("LEFT", 6, -1, "PrevPage")
-nav.next = PageButton("RIGHT", -3, 1, "NextPage")
+nav.prev = PageButton("LEFT", 0, -1, "PrevPage")
+nav.next = PageButton("RIGHT", 0, 1, "NextPage")
 
 local function ItemTooltip(self)
   local item = self.item
@@ -511,10 +461,10 @@ end
 local function NewItemButton(i)
   local b = CreateFrame("ItemButton", nil, buttonFrame)
   b:SetSize(ITEM_SIZE, ITEM_SIZE)
-  if (i - 1) % PER_ROW == 0 then
-    b:SetPoint("TOPLEFT", buttonFrame, "TOPLEFT", BORDER, -BORDER - ROW_STEP * math.floor((i - 1) / PER_ROW))
+  if (i - 1) % PER_COLUMN == 0 then
+    b:SetPoint("BOTTOMLEFT", buttonFrame, "BOTTOMLEFT", (ITEM_SIZE + ITEM_GAP) * math.floor((i - 1) / PER_COLUMN), 0)
   else
-    b:SetPoint("TOPLEFT", itemButtons[i - 1], "TOPRIGHT", ITEM_GAP, 0)
+    b:SetPoint("BOTTOMLEFT", itemButtons[i - 1], "TOPLEFT", 0, ITEM_GAP)
   end
   b:RegisterForClicks("LeftButtonUp")
   b.cooldown = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
@@ -559,10 +509,9 @@ ShowPage = function()
   end
   -- (past one page, every page is a full one, so the flyout keeps its size)
   local n = pages > 1 and PER_PAGE or onPage
-  local across = math.min(n, PER_ROW)
-  buttonFrame:SetWidth(across * ITEM_SIZE + (across - 1) * ITEM_GAP + BORDER)
-  buttonFrame:SetHeight(43 + math.floor((n - 1) / PER_ROW) * ROW_STEP)
-  LayBackground(n)
+  local up, across = math.min(n, PER_COLUMN), math.ceil(n / PER_COLUMN)
+  buttonFrame:SetHeight(up * ITEM_SIZE + (up - 1) * ITEM_GAP)
+  buttonFrame:SetWidth(across * ITEM_SIZE + (across - 1) * ITEM_GAP)
   nav:SetShown(pages > 1)
   nav.prev:SetEnabled(flyout.page > 1)
   nav.next:SetEnabled(flyout.page < pages)
@@ -577,13 +526,23 @@ local function Fill()
 end
 
 -- A click anywhere else closes it: on the world, a frame, the slots. Not one on an arrow,
--- which opens or closes it itself.
+-- which opens it itself.
 local function Inside()
   if buttonFrame:IsMouseOver() or (nav:IsShown() and nav:IsMouseOver()) then return true end
   for _, b in pairs(slotButtons) do
-    if b.arrow:IsMouseOver() then return true end
+    if b.arrow:IsShown() and b.arrow:IsMouseOver() then return true end
   end
   return false
+end
+
+-- A slot's arrow shows while the mouse is on the slot or on the arrow (hovered: it just came
+-- onto the slot), but not while the slot's flyout is open, which sits where the arrow was
+-- (MultiCastSlotButton_OnEnter and MultiCastFlyoutFrameOpenButton_Hide). Escape or a click
+-- elsewhere closes it.
+UpdateArrow = function(b, hovered)
+  local open = flyout:IsShown() and flyout.slotButton == b
+  local over = hovered or b:IsMouseOver() or (b.arrow:IsShown() and b.arrow:IsMouseOver())
+  b.arrow:SetShown(over and not open)
 end
 
 flyout:SetScript("OnShow", function(self)
@@ -596,8 +555,9 @@ end)
 
 flyout:SetScript("OnHide", function(self)
   pcall(self.UnregisterEvent, self, "GLOBAL_MOUSE_DOWN")
-  if self.slotButton then ArrowLook(self.slotButton.arrow, false) end
+  local b = self.slotButton
   self.slotButton, self.invSlot = nil, nil
+  if b then UpdateArrow(b) end  -- back if the mouse is still on the slot
 end)
 
 ToggleFlyout = function(b)
@@ -615,10 +575,11 @@ ToggleFlyout = function(b)
   flyout:SetPoint("CENTER", b)
   highlight:ClearAllPoints()
   highlight:SetPoint("CENTER", b)
+  -- Straight above the slot, where the arrow was, the column going on from it.
   buttonFrame:ClearAllPoints()
-  buttonFrame:SetPoint("BOTTOMLEFT", b.arrow, "TOPLEFT", 0, 0)
-  ArrowLook(b.arrow, true)
+  buttonFrame:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 0, ITEM_GAP)
   flyout:Show()
+  UpdateArrow(b)
 end
 
 --------------------------------------------------------------------------------
