@@ -3,7 +3,7 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 
 ## Files
 - `Upkeep.lua`: the whole addon. Config tables at the top: `SELF_BUFFS` (per class token, plus `ALL`), `WEAPON_ENCHANTS` (per class, only `SHAMAN` filled in), `BLESSING_SPELLS`, `UTILITY_BLESSINGS`. Sections in order: seal bar (`UpdateSeal`, `PlaceBar`), blessings (`ReadBlessings`, `Castable`), button rows (`NewButtonRow`, `LayoutRow`, `RowAdd`/`RowRemove`, `Sync`, `DrawPlainRow`, `Style`), public API, own reminders (`BlessingReminder`, `WeaponReminders`, `SelfBuffReminders`, `XPReminders`, called from `UpdateSelf`), target row (`UpdateTarget`), driver (`OnCast`, `Every`, `Debug`, event frame).
-- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change).
+- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting and mounted, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change).
 
 ## How it works
 - Polling: `Every(0.05, UpdateSeal)`, `Every(0.1, UpdateSelf)`, `Every(0.1, UpdateTarget)`. Each runs on its own OnUpdate frame, so an error in one can't stop the others.
@@ -25,13 +25,13 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
   - `tooltip`: plain text, used only when there's no `item` or `spell`.
   - `glow = false`: stays unlit in combat.
   - `desaturate = false`: full colour, unlit.
-  - `resting = true`: still shows in rested areas.
+  - `resting = true`: still shows in rested areas and while mounted.
 - Callers: Bobber (`Bobber.lure`), Tandem and TalentPath, all with `resting = true`. They declare `OptionalDeps: Upkeep` and check `Upkeep and Upkeep.AddReminder` first. Upkeep's own ids start with `Upkeep.`.
 
 ## Decisions (keep)
 - Reminders grow rightwards from the seal bar's top-left corner (this was flipped from leftwards on 2026-11-22). `selfRow` is anchored to the player health bar, never to `bar`, so the seal bar can still show and hide in combat. `PlaceSelfRow` repeats `PlaceBar`'s arithmetic, so change both together. Only the plain-icon row is anchored to `bar`.
 - Target row: a child of `TargetFrame`, starting at its top-left (`TARGET_X`, `TARGET_Y`), hidden in combat by the state driver `[combat] hide; show`. It shows one button per blessing a cast of yours would add, and none if one of yours is already there. Duration is ignored; icons are full colour and unlit. Freedom, Protection and Sacrifice never count.
-- In rested areas (`IsResting`), reminders on both rows hide but are kept. `resting = true` opts a reminder out. The seal bar is unaffected.
+- In rested areas (`IsResting`) and while mounted (`IsMounted`, a secret value counts as not mounted), reminders on both rows hide but are kept: `Resting()`, polled by `UpdateResting` each refresh. `resting = true` opts a reminder out. The seal bar is unaffected.
 - No class enchant reminder for a fishing pole in the main hand: the pole wants a lure, which is Bobber's reminder.
 - Experience food: you only count as fed with a "Well Fed" buff whose tooltip says "xperience". Well-Rested and Camp Benefits mention experience too, and counting them was a bug. Food that mentions "Fishing Skill" (Filet of Redgill) is kept for fishing; the user chose this. The pick is the highest item level, then the biggest stack.
 - Sleeping bag: offered when it's off cooldown and Well-Rested is missing, under `BAG_STACKS` (3) or under `BAG_EARLY` (10 min) left.
@@ -48,6 +48,6 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 - Counts show only for items that stack (`Stacks`, which is nil until the item loads), and as "*" above 9999.
 
 ## Open
-- Untested in game: sleeping-bag stacks and early warning, rested-area hiding, target-frame blessing buttons on a Paladin.
+- Untested in game: sleeping-bag stacks and early warning, rested-area and mounted hiding, target-frame blessing buttons on a Paladin.
 - `WEAPON_ENCHANTS.ROGUE` (poisons) is a commented-out stub with no item ids, though the file's header mentions Rogue poisons.
 - `/upkeep`'s preview shows nothing on a non-Paladin, because `UpdateSeal` hides the bar.

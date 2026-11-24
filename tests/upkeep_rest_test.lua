@@ -1,6 +1,8 @@
 restingNow = false
+mountedNow = false
 clock = 0
--- Upkeep mock: rested areas hide reminders, except ones added with resting = true.
+-- Upkeep mock: rested areas and being mounted hide reminders, except ones added with
+-- resting = true. The mounted part asserts (PASS/FAIL).
 local path = ...
 
 local M -- a value that can be called or indexed without end
@@ -56,6 +58,7 @@ local env = setmetatable({
   InCombatLockdown = function() return lockdown end,
   UnitAffectingCombat = function() return combat end,
   IsResting = function() return restingNow end,
+  IsMounted = function() return mountedNow end,
   GetTime = function() return clock end,
   RegisterStateDriver = function(f, state, cond) f.driver = cond end,
   IsSpellKnown = function(id) return id == 19740 or id == 20217 or id == 6673 end,
@@ -144,4 +147,37 @@ Report("in combat, entered a rested area")
 combat, lockdown = false, false
 Fire("PLAYER_REGEN_ENABLED")
 Report("after that combat")
-print("ok")
+
+-- Mounted: the same as resting, picked up by the regular refresh (no event).
+local function Shown()
+  local out = {}
+  for _, b in ipairs(buttons) do
+    if b.shown and b.attrs.spell then out[#out + 1] = b.attrs.spell end
+  end
+  table.sort(out)
+  return table.concat(out, ",")
+end
+local function Expect(label, cond)
+  print((cond and "PASS " or "FAIL ") .. label)
+  if not cond then failed = true end
+end
+restingNow = false
+Fire("PLAYER_UPDATE_RESTING")
+Expect("all three shown out of town", Shown() == "333,444,20217")
+mountedNow = true
+Tick()
+Report("mounted")
+Expect("mounted: only c (resting = true) shown", Shown() == "444")
+mountedNow = false
+Tick()
+Expect("dismounted: all three back", Shown() == "333,444,20217")
+mountedNow = true
+combat, lockdown = true, true
+Tick()
+Expect("mounted in combat: nothing moves until combat ends", Shown() == "333,444,20217")
+combat, lockdown = false, false
+Fire("PLAYER_REGEN_ENABLED")
+Expect("after that combat: only c shown", Shown() == "444")
+mountedNow = false
+Tick()
+print(failed and "FAILED" or "ok")

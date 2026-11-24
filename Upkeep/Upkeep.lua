@@ -612,10 +612,16 @@ local function DrawPlainRow(row, entries, combat, pulse)
   row.panel:Show()
 end
 
--- In a rested area - an inn or a city - reminders stay out of the way, except those added
--- with resting = true (such as a lure reminder, for fishing in town). They are kept, not
--- removed, and come back as you leave.
-local resting = false
+-- In a rested area - an inn or a city - and while mounted, reminders stay out of the way,
+-- except those added with resting = true (such as a lure reminder, for fishing in town).
+-- They are kept, not removed, and come back as you leave or dismount.
+local resting = false  -- in a rested area or mounted
+
+local function Resting()
+  if IsResting() == true then return true end
+  local mounted = IsMounted()
+  return not isSecret(mounted) and mounted == true
+end
 
 local function Shown(e)
   return e.resting or not resting
@@ -773,10 +779,11 @@ local function DrawRow(row, combat, pulse)
   end
 end
 
--- Notices entering or leaving a rested area and lays the rows out again (after combat, if
--- in it). Returns nothing; called every refresh and on PLAYER_UPDATE_RESTING.
+-- Notices entering or leaving a rested area, or mounting and dismounting, and lays the rows
+-- out again (after combat, if in it). Returns nothing; called every refresh and on
+-- PLAYER_UPDATE_RESTING.
 local function UpdateResting()
-  local now = IsResting() == true
+  local now = Resting()
   if now == resting then return end
   resting = now
   for _, row in ipairs(buttonRows) do
@@ -846,7 +853,8 @@ selfRow.place = PlaceSelfRow
 -- info.tooltip:    text shown on mouseover, when neither item nor spell is given.
 -- info.glow:       false to stay unlit in combat.
 -- info.desaturate: false to show the icon in full colour, unlit.
--- info.resting:    true to show it in rested areas too, where reminders are hidden.
+-- info.resting:    true to show it in rested areas and while mounted too, where reminders
+--                  are hidden.
 Upkeep = Upkeep or {}
 
 function Upkeep.AddReminder(id, info)
@@ -1778,7 +1786,7 @@ local sentCasts = {}
 events:SetScript("OnEvent", function(_, event, a1, a2, a3)
   if event == "PLAYER_LOGIN" then
     PlaceBar()
-    resting = IsResting() == true
+    resting = Resting()
     -- Place the button rows now the bar has its size (held back if in combat).
     for _, row in ipairs(buttonRows) do
       row.placed = false

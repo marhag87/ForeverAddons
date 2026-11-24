@@ -14,7 +14,7 @@ Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is 
 | [Tandem](Tandem) | Helps you dual-box: sets of your characters on different accounts find each other at login, group up, switch to free-for-all loot and turn the sound off on all but the main. With Upkeep it adds clickable reminders to focus the main and to cast a login spell such as a stance. |
 | [ThreatGap](ThreatGap) | Shows threat on enemy nameplates: a coloured strip on every mob and your exact threat lead or headroom on your target, with tank and non-tank views. |
 | [TrinketQueue](TrinketQueue) | Shows your two trinket slots in a frame of their own, drawn like the character sheet's. A click or a key binding uses a trinket, and the arrow above a slot lists the trinkets in your bags: the one you pick goes on as soon as you're out of combat. Shift-drag to move. |
-| [Upkeep](Upkeep) | Shows a duration bar for a Paladin's seal and reminds you of missing blessings, weapon enchants, class self-buffs, Find Minerals or Find Herbs, and below the level cap of food that adds experience and a Cozy Sleeping Bag. A click on a reminder casts what's missing, and each shows its tooltip; in inns and cities they stay hidden. Other addons can add reminders to its row. |
+| [Upkeep](Upkeep) | Shows a duration bar for a Paladin's seal and reminds you of missing blessings, weapon enchants, class self-buffs, Find Minerals or Find Herbs, and below the level cap of food that adds experience and a Cozy Sleeping Bag. A click on a reminder casts what's missing, and each shows its tooltip; in inns and cities, and while mounted, they stay hidden. Other addons can add reminders to its row. |
 
 ## Installing
 
