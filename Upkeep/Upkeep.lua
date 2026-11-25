@@ -25,15 +25,46 @@ local isPaladin = class == "PALADIN"
 -- of them on you satisfies it, for spells that replace each other. Each spell lists all
 -- its ranks as spell ids, lowest first, so a position is a rank; a lower rank than you
 -- know counts as missing. An entry only reminds you once you know one of its spells.
--- duration, in seconds, times a cast in combat until the buff has been seen on you.
+-- With nothing seen on you yet, the reminder suggests the first spell of the set you know.
+-- duration, in seconds, times a cast in combat until the buff has been seen on you; 0 for
+-- one that lasts until it is cancelled.
 -- early, in seconds, reminds you that long before the buff runs out, so you can refresh it
 -- in time; without it the reminder waits until the buff is gone.
+-- mine = true counts only a buff you cast yourself, not the same one from someone else.
 local SELF_BUFFS = {
   ALL = {
     -- One tracking at a time, so with both professions either one satisfies it.
     {
       { 2580 },  -- Find Minerals, known once you have trained Mining
       { 2383 },  -- Find Herbs, known once you have trained Herbalism
+    },
+  },
+  MAGE = {
+    {
+      { 1459, 1460, 1461, 10156, 10157 },  -- Arcane Intellect
+      { 23028 },  -- Arcane Brilliance, the group version, from a tome
+      duration = 30 * 60,
+    },
+    -- One armor at a time. Ice Armor comes first, so it is suggested over Frost Armor.
+    {
+      { 7302, 7320, 10219, 10220 },  -- Ice Armor, which replaces Frost Armor at 30
+      { 168, 7300, 7301 },           -- Frost Armor
+      { 6117, 22782, 22783 },        -- Mage Armor
+      duration = 30 * 60,
+    },
+  },
+  PALADIN = {
+    -- One aura of yours at a time. Another paladin's aura on you doesn't count.
+    {
+      { 465, 10290, 643, 10291, 1032, 10292, 10293 },  -- Devotion Aura
+      { 7294, 10298, 10299, 10300, 10301 },            -- Retribution Aura
+      { 19746 },                                       -- Concentration Aura
+      { 20218 },                                       -- Sanctity Aura, a talent
+      { 19876, 19895, 19896 },                         -- Shadow Resistance Aura
+      { 19888, 19897, 19898 },                         -- Frost Resistance Aura
+      { 19891, 19899, 19900 },                         -- Fire Resistance Aura
+      duration = 0,
+      mine = true,
     },
   },
   SHAMAN = {
@@ -1206,6 +1237,14 @@ local function SelfBuffOf(name, spellId)
   end
 end
 
+-- Whether an aura's caster is known to be someone other than you. One whose caster can't
+-- be read could be yours.
+local function CastByOther(src)
+  if src == nil then return false end
+  local ok, same = pcall(UnitIsUnit, src, "player")
+  return ok and not isSecret(same) and not same
+end
+
 -- One scan of your auras updates every entry. In combat nothing is readable, so each
 -- keeps its last reading, carried forward until it would run out: a buff that ends
 -- early mid-fight (Lightning Shield running out of charges) shows once combat ends.
@@ -1215,11 +1254,11 @@ local function ReadSelfBuffs()
   wipe(selfBuffScratch)
   local readable = 0
   for i = 1, 40 do
-    local name, dur, exp, _, _, spellId = ReadAura("player", i, "HELPFUL")
+    local name, dur, exp, src, _, spellId = ReadAura("player", i, "HELPFUL")
     if name then
       readable = readable + 1
       local e, sp, rank = SelfBuffOf(name, spellId)
-      if e then
+      if e and not (e.spells.mine and CastByOther(src)) then
         if dur and dur > 0 then e.dur[sp] = dur end
         selfBuffScratch[e] = { exp = exp, spell = sp, rank = rank }
       end
@@ -1233,7 +1272,8 @@ local function ReadSelfBuffs()
 end
 
 -- Adds a reminder to out for every entry that is missing or outranked, in table order. A
--- click casts your best rank of the spell it suggests.
+-- click casts your best rank of the spell it suggests, on you even with a friendly target
+-- (Arcane Intellect).
 local function SelfBuffReminders(out)
   ReadSelfBuffs()
   local now = GetTime()
@@ -1270,7 +1310,7 @@ local function SelfBuffReminders(out)
       local spell = e.spells[pick][e.known[pick]]
       out[#out + 1] = {
         id = "Upkeep.selfbuff" .. i, icon = e.icons[pick], spell = spell,
-        click = { type = "spell", spell = spell },
+        click = { type = "spell", spell = spell, unit = "player" },
         glow = gap,  -- an early warning for one still up doesn't glow; only a gap does
       }
     end
@@ -1627,7 +1667,8 @@ local function OnCast(spellID)
     local e = b.entry
     e.last = b.spell
     local d = e.dur[b.spell] or e.spells.duration or SELF_BUFF_DURATION
-    e.state = { exp = GetTime() + d, spell = b.spell, rank = b.rank }
+    -- An expiry of 0 never runs out, as an aura reads.
+    e.state = { exp = d > 0 and GetTime() + d or 0, spell = b.spell, rank = b.rank }
     return
   end
   if name:find(SEAL_PATTERN) then
@@ -1734,7 +1775,7 @@ local function Debug()
       #knownNames > 0 and table.concat(knownNames, ", ") or "none",
       st == nil and "not read yet" or (st and tostring(e.names[st.spell]) or "none"),
       tostring(st and st.rank),
-      st and st.exp and string.format("%.0fs", st.exp - GetTime()) or "nil"))
+      st and st.exp and (st.exp > 0 and string.format("%.0fs", st.exp - GetTime()) or "no end") or "nil"))
   end
   local foods, read = {}, {}
   for _, id in ipairs(xpFoods) do

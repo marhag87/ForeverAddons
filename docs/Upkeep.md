@@ -2,8 +2,8 @@
 Paladin seal duration bar, plus one row of clickable reminders for anything you should keep up (blessings, weapon enchants, class self-buffs, gathering tracking, experience food, sleeping bag). Other addons add their own reminders to the same row. Named SealTimer until 2026-11-17.
 
 ## Files
-- `Upkeep.lua`: the whole addon. Config tables at the top: `SELF_BUFFS` (per class token, plus `ALL`), `WEAPON_ENCHANTS` (per class, only `SHAMAN` filled in), `BLESSING_SPELLS`, `UTILITY_BLESSINGS`. Sections in order: seal bar (`UpdateSeal`, `PlaceBar`), blessings (`ReadBlessings`, `Castable`), button rows (`NewButtonRow`, `LayoutRow`, `RowAdd`/`RowRemove`, `Sync`, `DrawPlainRow`, `Style`), public API, own reminders (`BlessingReminder`, `WeaponReminders`, `SelfBuffReminders`, `XPReminders`, called from `UpdateSelf`), target row (`UpdateTarget`), driver (`OnCast`, `Every`, `Debug`, event frame).
-- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting and mounted, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change).
+- `Upkeep.lua`: the whole addon. Config tables at the top: `SELF_BUFFS` (per class token: `MAGE`, `PALADIN`, `SHAMAN`, `WARRIOR`, plus `ALL`), `WEAPON_ENCHANTS` (per class, only `SHAMAN` filled in), `BLESSING_SPELLS`, `UTILITY_BLESSINGS`. Sections in order: seal bar (`UpdateSeal`, `PlaceBar`), blessings (`ReadBlessings`, `Castable`), button rows (`NewButtonRow`, `LayoutRow`, `RowAdd`/`RowRemove`, `Sync`, `DrawPlainRow`, `Style`), public API, own reminders (`BlessingReminder`, `WeaponReminders`, `SelfBuffReminders`, `XPReminders`, called from `UpdateSelf`), target row (`UpdateTarget`), driver (`OnCast`, `Every`, `Debug`, event frame).
+- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting and mounted, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change), and class self buffs read from auras (`upkeep_selfbuff_test`, modes `mage` and `paladin`).
 
 ## How it works
 - Polling: `Every(0.05, UpdateSeal)`, `Every(0.1, UpdateSelf)`, `Every(0.1, UpdateTarget)`. Each runs on its own OnUpdate frame, so an error in one can't stop the others.
@@ -37,6 +37,9 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 - Sleeping bag: offered when it's off cooldown and Well-Rested is missing, under `BAG_STACKS` (3) or under `BAG_EARLY` (10 min) left.
 - Glow is only for real gaps. Early warnings (`early`; Shaman imbues warn 5 min ahead), experience food, the sleeping bag and target blessings stay unlit. The experience reminders don't come or go during combat.
 - A lower rank than you know counts as missing; a rank that can't be read doesn't, so it never nags without reason.
+- Self-buff clicks carry `unit = "player"`, so Arcane Intellect lands on you even with a friendly target.
+- Mage (2.21): Arcane Intellect, where Arcane Brilliance or another mage's cast also counts, and one armor: Ice, Frost or Mage Armor. The user asked for "a mage shield that behaves like Lightning and Water Shield". Forever's mage trainer list (WhatsTraining `Classes/Camelot/Mage.lua`) has no kept-up shield, so the armors are it. Ice Armor is listed first, so it's suggested over Frost Armor, but Frost Armor already up still counts.
+- Paladin aura (2.21): any of the seven, as one entry. `mine = true`, so another paladin's aura on you doesn't count (`CastByOther` reads the aura's source). `duration = 0`, since an aura doesn't run out: a cast in combat sets an expiry of 0, as an aura reads.
 
 ## Gotchas
 - The spellbook can't be enumerated. Every rank is listed by spell id (lowest first, so a position is a rank) and checked with `IsSpellKnown`, falling back to `IsPlayerSpell` for rune spells such as Water Shield 408510. A new spell needs its ids added to the tables.
@@ -48,6 +51,6 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 - Counts show only for items that stack (`Stacks`, which is nil until the item loads), and as "*" above 9999.
 
 ## Open
-- Untested in game: sleeping-bag stacks and early warning, rested-area and mounted hiding, target-frame blessing buttons on a Paladin.
+- Untested in game: sleeping-bag stacks and early warning, rested-area hiding (mounted hiding works), target-frame blessing buttons on a Paladin.
 - `WEAPON_ENCHANTS.ROGUE` (poisons) is a commented-out stub with no item ids, though the file's header mentions Rogue poisons.
 - `/upkeep`'s preview shows nothing on a non-Paladin, because `UpdateSeal` hides the bar.
