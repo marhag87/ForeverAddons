@@ -6,7 +6,7 @@
 -- experience food and a sleeping bag. Every reminder is a button that casts what's missing and
 -- shows its tooltip, except that one coming up in combat is a plain icon until the fight
 -- ends (see "Reminder icons" below). Other addons can add reminders of their own with
--- Upkeep.AddReminder.
+-- Upkeep.AddReminder, and ask for a buff to be kept up with Upkeep.KeepBuff.
 --
 -- This client restricts addons the way retail does. Established by testing in game:
 --   * Enumerating the spellbook and reading the combat log are forbidden outright, and
@@ -31,6 +31,7 @@ local isPaladin = class == "PALADIN"
 -- early, in seconds, reminds you that long before the buff runs out, so you can refresh it
 -- in time; without it the reminder waits until the buff is gone.
 -- mine = true counts only a buff you cast yourself, not the same one from someone else.
+-- optional = true reminds only while another addon asks for it with Upkeep.KeepBuff.
 local SELF_BUFFS = {
   ALL = {
     -- One tracking at a time, so with both professions either one satisfies it.
@@ -65,6 +66,13 @@ local SELF_BUFFS = {
       { 19891, 19899, 19900 },                         -- Fire Resistance Aura
       duration = 0,
       mine = true,
+    },
+    -- For tanking, so only when asked: Tandem's /tandem buff asks while you play your set.
+    {
+      { 25780 },  -- Righteous Fury; one rank
+      duration = 30 * 60,
+      early = 5 * 60,
+      optional = true,
     },
   },
   SHAMAN = {
@@ -886,6 +894,7 @@ selfRow.place = PlaceSelfRow
 -- info.desaturate: false to show the icon in full colour, unlit.
 -- info.resting:    true to show it in rested areas and while mounted too, where reminders
 --                  are hidden.
+-- Upkeep.KeepBuff comes further down, with the self buffs.
 Upkeep = Upkeep or {}
 
 function Upkeep.AddReminder(id, info)
@@ -1196,34 +1205,41 @@ local SELF_BUFF_DURATION = 600  -- for an entry that gives none
 -- last is the spell from the set you last had up or cast, the one to suggest.
 local selfBuffs = {}
 local SELF_BUFF_OF = {}  -- spell id -> { entry, spell, rank }
+
+-- spells: a set from SELF_BUFFS.
+local function AddSelfBuff(spells)
+  local e = { spells = spells, known = {}, icons = {}, names = {}, dur = {} }
+  selfBuffs[#selfBuffs + 1] = e
+  for sp, ranks in ipairs(spells) do
+    for rank, id in ipairs(ranks) do SELF_BUFF_OF[id] = { entry = e, spell = sp, rank = rank } end
+  end
+  return e
+end
+
 -- Your class's entries first, so they sit nearer the seal bar's corner.
 for _, list in ipairs({ SELF_BUFFS[class] or {}, SELF_BUFFS.ALL }) do
-  for _, spells in ipairs(list) do
-    local e = { spells = spells, known = {}, icons = {}, names = {}, dur = {} }
-    selfBuffs[#selfBuffs + 1] = e
-    for sp, ranks in ipairs(spells) do
-      for rank, id in ipairs(ranks) do SELF_BUFF_OF[id] = { entry = e, spell = sp, rank = rank } end
+  for _, spells in ipairs(list) do AddSelfBuff(spells) end
+end
+
+local function SeedSelfBuff(e)
+  wipe(e.known)
+  for sp, ranks in ipairs(e.spells) do
+    for rank, id in ipairs(ranks) do
+      local ok, isKnown = pcall(IsSpellKnown, id)
+      -- A spell from a rune can be missing from IsSpellKnown but still be yours.
+      if not (ok and isKnown) and IsPlayerSpell then ok, isKnown = pcall(IsPlayerSpell, id) end
+      if ok and isKnown then
+        e.known[sp] = rank  -- ranks go up, so the last one known is the highest
+        e.icons[sp] = SpellTexture(id) or e.icons[sp] or "Interface/Icons/INV_Misc_QuestionMark"
+        e.names[sp] = e.names[sp] or SpellName(id)
+      end
     end
   end
 end
 
 local function SeedSelfBuffs()
   if not IsSpellKnown then return end
-  for _, e in ipairs(selfBuffs) do
-    wipe(e.known)
-    for sp, ranks in ipairs(e.spells) do
-      for rank, id in ipairs(ranks) do
-        local ok, isKnown = pcall(IsSpellKnown, id)
-        -- A spell from a rune can be missing from IsSpellKnown but still be yours.
-        if not (ok and isKnown) and IsPlayerSpell then ok, isKnown = pcall(IsPlayerSpell, id) end
-        if ok and isKnown then
-          e.known[sp] = rank  -- ranks go up, so the last one known is the highest
-          e.icons[sp] = SpellTexture(id) or e.icons[sp] or "Interface/Icons/INV_Misc_QuestionMark"
-          e.names[sp] = e.names[sp] or SpellName(id)
-        end
-      end
-    end
-  end
+  for _, e in ipairs(selfBuffs) do SeedSelfBuff(e) end
 end
 
 -- The entry and spell an aura belongs to: by spell id, or by name when the id is hidden.
@@ -1281,8 +1297,9 @@ local function SelfBuffReminders(out)
     local st = e.state
     local pick  -- the spell to remind you of, by position in the set; nil if nothing is missing
     local gap = false  -- missing or outranked, rather than just ending soon
-    -- Nothing known means nothing to cast; nothing read yet means absence is unproven.
-    if next(e.known) and st ~= nil then
+    -- Nothing known means nothing to cast; nothing read yet means absence is unproven. An
+    -- optional entry waits to be asked for.
+    if next(e.known) and st ~= nil and (e.wanted or not e.spells.optional) then
       if st and st.exp and st.exp > 0 and st.exp <= now then st = false end
       -- A lower rank of the spell that is up than you know counts as missing; a rank
       -- that cannot be read does not, so it never nags without reason.
@@ -1315,6 +1332,25 @@ local function SelfBuffReminders(out)
       }
     end
   end
+end
+
+-- The public API, continued. Upkeep.KeepBuff(spellId, wanted) reminds you to keep a buff of
+-- yours up while wanted is true, as it does your class's buffs, and stops when it is false.
+-- A buff listed in SELF_BUFFS, such as Righteous Fury, brings its ranks and early warning;
+-- any other spell is taken as a buff of one rank. Turning off a buff Upkeep always reminds
+-- you of does nothing.
+function Upkeep.KeepBuff(spellId, wanted)
+  if type(spellId) ~= "number" then
+    error("Usage: Upkeep.KeepBuff(spellId, wanted) with a spell id", 2)
+  end
+  local b = SELF_BUFF_OF[spellId]
+  local e = b and b.entry
+  if not e then
+    if not wanted then return end
+    e = AddSelfBuff({ { spellId }, optional = true })
+    if IsSpellKnown then SeedSelfBuff(e) end
+  end
+  e.wanted = wanted and true or false
 end
 
 --------------------------------------------------------------------------------

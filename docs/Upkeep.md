@@ -3,7 +3,7 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 
 ## Files
 - `Upkeep.lua`: the whole addon. Config tables at the top: `SELF_BUFFS` (per class token: `MAGE`, `PALADIN`, `SHAMAN`, `WARRIOR`, plus `ALL`), `WEAPON_ENCHANTS` (per class, only `SHAMAN` filled in), `BLESSING_SPELLS`, `UTILITY_BLESSINGS`. Sections in order: seal bar (`UpdateSeal`, `PlaceBar`), blessings (`ReadBlessings`, `Castable`), button rows (`NewButtonRow`, `LayoutRow`, `RowAdd`/`RowRemove`, `Sync`, `DrawPlainRow`, `Style`), public API, own reminders (`BlessingReminder`, `WeaponReminders`, `SelfBuffReminders`, `XPReminders`, called from `UpdateSelf`), target row (`UpdateTarget`), driver (`OnCast`, `Every`, `Debug`, event frame).
-- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting and mounted, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change), and class self buffs read from auras (`upkeep_selfbuff_test`, modes `mage` and `paladin`).
+- Mock tests: `tests/upkeep_*_test.lua` cover rows in and out of combat, food, sleeping bag, Shaman enchant, Redgill, resting and mounted, counts and late-loading food (`nocache`, `nospell` modes, and a no read again at a bag change), and class self buffs read from auras (`upkeep_selfbuff_test`, modes `mage` and `paladin`; the paladin mode also covers `KeepBuff`).
 
 ## How it works
 - Polling: `Every(0.05, UpdateSeal)`, `Every(0.1, UpdateSelf)`, `Every(0.1, UpdateTarget)`. Each runs on its own OnUpdate frame, so an error in one can't stop the others.
@@ -26,7 +26,8 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
   - `glow = false`: stays unlit in combat.
   - `desaturate = false`: full colour, unlit.
   - `resting = true`: still shows in rested areas and while mounted.
-- Callers: Bobber (`Bobber.lure`), Tandem and TalentPath, all with `resting = true`. They declare `OptionalDeps: Upkeep` and check `Upkeep and Upkeep.AddReminder` first. Upkeep's own ids start with `Upkeep.`.
+- `Upkeep.KeepBuff(spellId, wanted)` switches a self buff on or off. A `SELF_BUFFS` entry marked `optional = true` (only Righteous Fury) reminds only while asked. Any other spell id gets a new one-rank optional entry (`AddSelfBuff`, `SeedSelfBuff`). Turning off an entry that isn't optional does nothing. Defined after `SelfBuffReminders`, because it needs the self-buff locals.
+- Callers: Bobber (`Bobber.lure`), Tandem and TalentPath, all with `resting = true`. They declare `OptionalDeps: Upkeep` and check `Upkeep and Upkeep.AddReminder` first. Tandem also calls `Upkeep.KeepBuff` for its set buff, after checking that it exists (2.22+). Upkeep's own ids start with `Upkeep.`.
 
 ## Decisions (keep)
 - Reminders grow rightwards from the seal bar's top-left corner (this was flipped from leftwards on 2026-11-22). `selfRow` is anchored to the player health bar, never to `bar`, so the seal bar can still show and hide in combat. `PlaceSelfRow` repeats `PlaceBar`'s arithmetic, so change both together. Only the plain-icon row is anchored to `bar`.
@@ -39,6 +40,7 @@ Paladin seal duration bar, plus one row of clickable reminders for anything you 
 - A lower rank than you know counts as missing; a rank that can't be read doesn't, so it never nags without reason.
 - Self-buff clicks carry `unit = "player"`, so Arcane Intellect lands on you even with a friendly target.
 - Mage (2.21): Arcane Intellect, where Arcane Brilliance or another mage's cast also counts, and one armor: Ice, Frost or Mage Armor. The user asked for "a mage shield that behaves like Lightning and Water Shield". Forever's mage trainer list (WhatsTraining `Classes/Camelot/Mage.lua`) has no kept-up shield, so the armors are it. Ice Armor is listed first, so it's suggested over Frost Armor, but Frost Armor already up still counts.
+- Righteous Fury (2.22): `optional`, with `early = 5 * 60` (the user's choice). A Ret paladin wants it only while tanking for their own characters, so Tandem decides when (`/tandem buff`). ThreatGap's `auto` view already turns to tank when it sees the aura.
 - Paladin aura (2.21): any of the seven, as one entry. `mine = true`, so another paladin's aura on you doesn't count (`CastByOther` reads the aura's source). `duration = 0`, since an aura doesn't run out: a cast in combat sets an expiry of 0, as an aura reads.
 
 ## Gotchas

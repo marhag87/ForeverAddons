@@ -20,6 +20,8 @@ run upkeep_loading_test Upkeep/Upkeep.lua nocache
 run upkeep_loading_test Upkeep/Upkeep.lua nospell
 run upkeep_selfbuff_test Upkeep/Upkeep.lua mage
 run upkeep_selfbuff_test Upkeep/Upkeep.lua paladin
+run tandem_buff_test Tandem/Tandem.lua
+run threatgap_fury_test ThreatGap/ThreatGap.lua
 run tq_test TrinketQueue/TrinketQueue.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua onshow

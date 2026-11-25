@@ -1,7 +1,8 @@
 -- Tandem.lua
 -- What Tandem does once it knows who is online: turns the follower's sound off, invites and
--- accepts, sets free-for-all loot, reminds the follower to focus the main, and reminds any
--- character of a spell to cast after logging in. Also the events and the slash commands.
+-- accepts, sets free-for-all loot, reminds the follower to focus the main, reminds any
+-- character of a spell to cast after logging in, and has Upkeep keep a buff up while you
+-- play your set. Also the events and the slash commands.
 --
 -- The reminders are buttons in Upkeep's reminder row, so they need Upkeep; without it Tandem
 -- does everything else and skips them.
@@ -166,6 +167,31 @@ local function UpdateLoginSpell()
 end
 
 ---------------------------------------------------------------------------------------------
+-- Set buff: a buff this character keeps up while it plays with its set, such as a paladin's
+-- Righteous Fury for tanking for the others. Upkeep watches the buff and reminds you of it;
+-- Tandem only says when.
+
+local keptBuff -- the spell id Upkeep was last asked to keep up
+
+local function UpdateSetBuff(set)
+	if not (Upkeep and Upkeep.KeepBuff) then
+		return
+	end
+	local spell = chardb.setBuff
+	local want = spell and set and not Paused() and spell.id or nil
+	if want == keptBuff then
+		return
+	end
+	if keptBuff then
+		Upkeep.KeepBuff(keptBuff, false)
+	end
+	keptBuff = want
+	if want then
+		Upkeep.KeepBuff(want, true)
+	end
+end
+
+---------------------------------------------------------------------------------------------
 -- Loot: the leader of a group made only of set members switches it to free-for-all, once per
 -- group, so a change you make by hand afterwards stays.
 
@@ -317,6 +343,7 @@ function ns.Changed()
 	UpdateSound(set, isMain)
 	UpdateFocus(set, isMain)
 	UpdateLoginSpell()
+	UpdateSetBuff(set)
 	UpdateLoot()
 end
 
@@ -356,8 +383,13 @@ local function Status()
 	local spell = chardb.loginSpell
 	Util.Print("login spell: " .. (spell and (spell.name .. (chardb.loginPending and ", waiting to be cast"
 		or ", cast this session")) or "none") .. ".")
+	local buff = chardb.setBuff
+	local when = keptBuff and ", kept up now" or ", kept up while you play your set"
+	Util.Print("set buff: " .. (buff and (buff.name .. when) or "none") .. ".")
 	if not HasUpkeep() then
 		Util.Print("Upkeep isn't loaded, so there are no reminders.")
+	elseif buff and not Upkeep.KeepBuff then
+		Util.Print("the set buff needs a newer Upkeep.")
 	end
 end
 
@@ -370,6 +402,7 @@ local function Help()
 	print("  /tandem invite - invite your set now; /tandem invite on|off for automatic invites")
 	print("  /tandem sound on|off, /tandem loot on|off, /tandem focus on|off")
 	print("  /tandem login <spell> - a reminder to cast it after each login; /tandem login off")
+	print("  /tandem buff <spell> - keep a buff up while you play your set; /tandem buff off")
 	print("  /tandem pause, /tandem resume - stop everything, and start again")
 end
 
@@ -391,6 +424,27 @@ local function SetLoginSpell(name)
 	Util.Print("after each login you'll get a reminder to cast " .. info.name .. ".")
 	if not HasUpkeep() then
 		Util.Print("the reminder needs Upkeep, which isn't loaded.")
+	end
+	ns.Changed()
+end
+
+local function SetSetBuff(name)
+	if name:lower() == "off" then
+		chardb.setBuff = nil
+		Util.Print("no set buff.")
+		ns.Changed()
+		return
+	end
+	local info = C_Spell.GetSpellInfo(name)
+	local known = info and IsPlayerSpell(info.spellID)
+	if not known then
+		Util.Print("this character doesn't know a spell called \"" .. name .. "\".")
+		return
+	end
+	chardb.setBuff = { id = info.spellID, name = info.name }
+	Util.Print("while you play your set, you'll get a reminder to keep " .. info.name .. " up.")
+	if not (Upkeep and Upkeep.KeepBuff) then
+		Util.Print("the reminder needs Upkeep, which isn't loaded or is too old.")
 	end
 	ns.Changed()
 end
@@ -418,6 +472,12 @@ SlashCmdList.TANDEM = function(msg)
 			Util.Print("/tandem login <spell name>, or /tandem login off")
 		else
 			SetLoginSpell(rest)
+		end
+	elseif command == "buff" then
+		if rest == "" then
+			Util.Print("/tandem buff <spell name>, or /tandem buff off")
+		else
+			SetSetBuff(rest)
 		end
 	elseif command == "pause" then
 		chardb.paused = true

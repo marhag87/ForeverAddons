@@ -1,6 +1,7 @@
 clock = 0
 -- Upkeep mock: class self buffs read from auras. Mode "mage": Arcane Intellect and the
--- armors. Mode "paladin": an aura, which never runs out and counts only when it is yours.
+-- armors. Mode "paladin": an aura, which never runs out and counts only when it is yours, and
+-- Righteous Fury, only while Upkeep.KeepBuff asks for it, with a 5 minute early warning.
 -- Asserts (PASS/FAIL).
 local path, mode = ...
 
@@ -53,10 +54,11 @@ local function NewFrame(kind, name, parent, template)
 end
 
 local KNOWN = mode == "paladin"
-  and { [10290] = true, [7294] = true }  -- Devotion Aura rank 2, Retribution Aura rank 1
+  -- Devotion Aura rank 2, Retribution Aura rank 1, Righteous Fury, a spell Upkeep doesn't list
+  and { [10290] = true, [7294] = true, [25780] = true, [31337] = true }
   or { [1459] = true, [1460] = true, [1461] = true, [168] = true, [7300] = true, [7301] = true, [7302] = true }
 local NAMES = {
-  [10290] = "Devotion Aura", [7294] = "Retribution Aura",
+  [10290] = "Devotion Aura", [7294] = "Retribution Aura", [25780] = "Righteous Fury", [31337] = "Some Buff",
   [1461] = "Arcane Intellect", [7301] = "Frost Armor", [7302] = "Ice Armor",
 }
 
@@ -173,6 +175,29 @@ if mode == "paladin" then
   Tick()
   Check("cast in combat, it doesn't run out", Plain(), 0)
   combat, lockdown = false, false
+  Tick()
+  Check("Righteous Fury missing but not asked for", Shown(), "")
+  env.Upkeep.KeepBuff(25780, true)
+  Tick()
+  Check("asked for: Righteous Fury", Shown(), "25780@player")
+  auras[2] = Aura(25780)
+  Tick()
+  Check("Righteous Fury up", Shown(), "")
+  auras[2].expirationTime = clock + 6 * 60
+  Tick()
+  Check("6 minutes left: no reminder yet", Shown(), "")
+  auras[2].expirationTime = clock + 4 * 60
+  Tick()
+  Check("4 minutes left: the early warning", Shown(), "25780@player")
+  env.Upkeep.KeepBuff(25780, false)
+  Tick()
+  Check("no longer asked for", Shown(), "")
+  env.Upkeep.KeepBuff(31337, true)
+  Tick()
+  Check("a buff Upkeep doesn't list", Shown(), "31337@player")
+  env.Upkeep.KeepBuff(31337, false)
+  Tick()
+  Check("and off again", Shown(), "")
 else
   Check("nothing up: Arcane Intellect and Ice Armor", Shown(), "1461@player 7302@player")
   auras = { Aura(1461, "party1"), Aura(7301) }  -- another mage's Intellect, your Frost Armor

@@ -51,10 +51,11 @@ local STANDINS = { "target", "focus", "mouseover" }
 local TANK_FORM_IDS = { [5] = "Bear Form", [8] = "Dire Bear Form", [18] = "Defensive Stance" }
 local TANK_FORM_SPELLS = { [71] = "Defensive Stance", [5487] = "Bear Form", [9634] = "Dire Bear Form" }
 local RIGHTEOUS_FURY = 25780
+local FURY_DURATION = 30 * 60 -- for your cast, until the buff itself can be read
 
 local UnitDetailedThreatSituation = UnitDetailedThreatSituation
 local GetNamePlateForUnit = C_NamePlate.GetNamePlateForUnit
-local issecretvalue = issecretvalue or function() return false end
+local issecretvalue = issecretvalue or function(_) return false end
 local floor, abs, max = math.floor, math.abs, math.max
 
 local FONT = _G.GameFontHighlightSmallOutline and "GameFontHighlightSmallOutline" or "GameFontHighlightSmall"
@@ -77,6 +78,41 @@ local role = "auto" -- saved per character: "auto", "tank" or "dps"
 local isTank = false
 local roleReason    -- why, for /threatgap
 
+-- Righteous Fury as last seen: whether it's up, when it runs out (nil or 0: not known to),
+-- and whether that was read just now. Forever hides your buffs from addons in combat, so a
+-- reading from before the fight, or your own cast, carries through it.
+local fury = { up = false }
+
+local function InCombat()
+  return UnitAffectingCombat("player") or InCombatLockdown()
+end
+
+-- true and the expiry if Righteous Fury reads as up, false if not, nil if it can't be read.
+-- pcall: reading an aura, or even one of its fields, can raise an error.
+local function ReadFury()
+  if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return nil end
+  local ok, up, exp = pcall(function()
+    local aura = C_UnitAuras.GetPlayerAuraBySpellID(RIGHTEOUS_FURY)
+    if issecretvalue(aura) then return nil end
+    if not aura then return false end
+    local e = aura.expirationTime
+    return true, (not issecretvalue(e) and type(e) == "number") and e or nil
+  end)
+  if ok then return up, exp end
+end
+
+local function FuryUp()
+  local up, exp = ReadFury()
+  fury.now = false
+  if up then
+    fury.up, fury.exp, fury.now = true, exp, true
+  elseif up == false and not InCombat() then
+    fury.up, fury.exp, fury.now = false, nil, true
+  end
+  if fury.up and fury.exp and fury.exp > 0 and fury.exp <= GetTime() then fury.up = false end
+  return fury.up
+end
+
 local function DetectTank()
   local formId = Plain(GetShapeshiftFormID and GetShapeshiftFormID())
   if formId and TANK_FORM_IDS[formId] then return true, TANK_FORM_IDS[formId] end
@@ -87,10 +123,8 @@ local function DetectTank()
       return true, TANK_FORM_SPELLS[spellId]
     end
   end
-  if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-    -- pcall: auras can be hidden from addons, and reading them may raise an error.
-    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, RIGHTEOUS_FURY)
-    if ok and not issecretvalue(aura) and aura then return true, "Righteous Fury" end
+  if FuryUp() then
+    return true, fury.now and "Righteous Fury" or "Righteous Fury, carried through combat, where buffs can't be read"
   end
   return false, "no tanking stance, form or Righteous Fury"
 end
@@ -500,14 +534,50 @@ handlers.UPDATE_MOUSEOVER_UNIT = UpdateAll
 handlers.PLAYER_REGEN_DISABLED = UpdateAll
 handlers.PLAYER_REGEN_ENABLED = UpdateAll
 
+-- Your own buffs and casts, registered for you alone.
+local playerHandlers = {}
+
+-- A buff of yours came or went: out of combat that can be read, so the view can change
+-- without waiting for a refresh.
+function playerHandlers.UNIT_AURA()
+  local was = isTank
+  RefreshRole()
+  if isTank ~= was then UpdateAll() end
+end
+
+-- Righteous Fury cast in combat, where its buff can't be read. The client also reports other
+-- players' casts as "player", so only a cast you sent counts: castGUID -> when it was sent.
+local sentCasts = {}
+
+function playerHandlers.UNIT_SPELLCAST_SENT(_, _, castGUID)
+  if issecretvalue(castGUID) or not castGUID then return end
+  local now = GetTime()
+  for guid, sent in pairs(sentCasts) do
+    if now - sent > 30 then sentCasts[guid] = nil end
+  end
+  sentCasts[castGUID] = now
+end
+
+function playerHandlers.UNIT_SPELLCAST_SUCCEEDED(_, castGUID, spellID)
+  if issecretvalue(castGUID) or issecretvalue(spellID) or not (castGUID and sentCasts[castGUID]) then return end
+  sentCasts[castGUID] = nil
+  if spellID ~= RIGHTEOUS_FURY then return end
+  fury.up, fury.exp = true, GetTime() + FURY_DURATION
+  UpdateAll()
+end
+
 local events = CreateFrame("Frame")
 events:SetScript("OnEvent", function(_, event, ...)
   if issecretvalue((...)) then return end
-  handlers[event](...)
+  local handler = handlers[event] or playerHandlers[event]
+  handler(...)
 end)
 for event in pairs(handlers) do
   -- pcall: registering an event this client doesn't have raises an error.
   pcall(events.RegisterEvent, events, event)
+end
+for event in pairs(playerHandlers) do
+  pcall(events.RegisterUnitEvent, events, event, "player")
 end
 
 --------------------------------------------------------------------------------------------
@@ -538,6 +608,11 @@ local function Diagnose()
     :format(barStats.hidden, barStats.plain, barStats.errors,
       barStats.lastError and (" (last: " .. tostring(barStats.lastError) .. ")") or ""))
   if lastError then Print("last error: " .. tostring(lastError)) end
+  if select(2, UnitClass("player")) == "PALADIN" then
+    local up = ReadFury()
+    Print(("Righteous Fury: the game says %s right now; carried through combat: %s."):format(
+      up == nil and "hidden" or up and "up" or "not up", fury.up and "up" or "not up"))
+  end
 
   for unit in pairs(widgets) do
     local ok, number, good, source = pcall(PlateNumber, unit)
