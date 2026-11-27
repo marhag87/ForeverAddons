@@ -3,6 +3,10 @@
 -- reels the catch in. Moving, swimming, falling, mounted, dead or in combat, it jumps as
 -- usual.
 --
+-- One press does one thing: when what the key should do changes while it's held down, it
+-- does nothing until it's let go. Otherwise letting go of the press that reeled in would
+-- cast again before the catch is looted. A second press casts at once, which still loots.
+--
 -- A few game settings make this work, so they're switched on while a pole is in your hand
 -- and put back when it isn't, and when you log out:
 --   * soft targeting for the interact key, from the keyboard, far and wide enough to pick
@@ -30,6 +34,7 @@ local TIME_UNITS = { sec = 1, min = 60, hour = 3600, hr = 3600 }
 local ITEM_CLASS_WEAPON = Enum.ItemClass and Enum.ItemClass.Weapon or 2
 local FISHING_POLE = Enum.ItemWeaponSubclass and Enum.ItemWeaponSubclass.Fishingpole or 20
 local KEYBOARD_BIT = 2 -- in softTargetInteract: 1 gamepad, 2 keyboard and mouse, 3 both
+local WAIT_BUTTON = "BobberWaitButton" -- "wait" binds the key to this button, which does nothing
 
 -- name -> function(current value) returning the value to switch to, or nil if it will do.
 local SETTINGS = {
@@ -63,7 +68,7 @@ local SETTINGS = {
 
 local db -- BobberDB: { enabled, saved = { setting name -> value to put back } }
 local fishingName -- the Fishing you know, nil if none
-local state -- what the key is set up for: "off", "jump", "cast", "reel" or "combat"
+local state -- what the key is set up for: "off", "jump", "cast", "reel", "wait" or "combat"
 local bestLure -- item id of the best lure in your bags, nil without one
 local lureEnds -- GetTime() the pole's lure runs out, false with none on it, nil before a reading
 local lureShown -- the lure the reminder was set up with, nil while it isn't up
@@ -83,6 +88,7 @@ owner:SetAttribute("_onstate-combat", [[
 	end
 ]])
 RegisterStateDriver(owner, "combat", "[combat] on; off")
+CreateFrame("Button", WAIT_BUTTON)
 
 ---------------------------------------------------------------------------------------------
 -- Settings
@@ -140,6 +146,28 @@ local function BobberOut()
 	return name == fishingName
 end
 
+local function JumpKeys()
+	local keys = { GetBindingKey("JUMP") }
+	if #keys == 0 then
+		keys = { "SPACE" }
+	end
+	return keys
+end
+
+-- Whether a jump key is down. A binding such as "SHIFT-SPACE" is down when its last key is.
+local function KeyHeld()
+	if not IsKeyDown then
+		return false
+	end
+	for _, key in ipairs(JumpKeys()) do
+		local down = IsKeyDown(key:match("[^-]+$") or key)
+		if not IsHidden(down) and down then
+			return true
+		end
+	end
+	return false
+end
+
 local function Wanted()
 	if InCombatLockdown() then
 		return "combat"
@@ -152,7 +180,13 @@ local function Wanted()
 		or UnitIsDeadOrGhost("player") then
 		return "jump"
 	end
-	return BobberOut() and "reel" or "cast"
+	local wanted = BobberOut() and "reel" or "cast"
+	-- Letting go of a key fires what it's bound to then, so the press that reels in would cast
+	-- as it's let go, before the catch is looted. Until the key is let go, it does nothing.
+	if wanted ~= state and KeyHeld() then
+		return "wait"
+	end
+	return wanted
 end
 
 local function Apply(wanted)
@@ -172,15 +206,13 @@ local function Apply(wanted)
 	if wanted == "jump" then
 		return
 	end
-	local keys = { GetBindingKey("JUMP") }
-	if #keys == 0 then
-		keys = { "SPACE" }
-	end
-	for _, key in ipairs(keys) do
+	for _, key in ipairs(JumpKeys()) do
 		if wanted == "cast" then
 			SetOverrideBindingSpell(owner, true, key, fishingName)
-		else
+		elseif wanted == "reel" then
 			SetOverrideBinding(owner, true, key, "INTERACTTARGET")
+		else -- "wait"
+			SetOverrideBindingClick(owner, true, key, WAIT_BUTTON)
 		end
 	end
 end
@@ -296,6 +328,7 @@ events:SetScript("OnEvent", function(_, event)
 			db.enabled = true
 		end
 		db.saved = db.saved or {}
+		db.trace = nil -- left by a trace build used to find the double cast
 		PutSettingsBack() -- left over if the game didn't close cleanly last time
 		FindFishing()
 		FindBestLure()

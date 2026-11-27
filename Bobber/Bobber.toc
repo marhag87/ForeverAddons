@@ -2,7 +2,7 @@
 ## Title: Bobber
 ## Notes: Fish with the jump key. With a fishing pole in hand and standing still, it casts Fishing, then reels in the catch. Moving, swimming or in combat it jumps as usual. With Upkeep, a clickable reminder to put a lure on the pole. /bobber turns it off and on.
 ## Author: Martin
-## Version: 1.0.1
+## Version: 1.0.2
 ## OptionalDeps: Upkeep
 ## SavedVariables: BobberDB
 
