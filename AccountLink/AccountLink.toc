@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: Account Link
+## Notes: Pairs your two accounts for dual-boxing and keeps other addons' data about your characters in step between them while you're grouped. Used by Syndicator Sync. /alink shows the pairing.
+## Author: Martin
+## Version: 1.0.0
+## IconTexture: Interface\Icons\INV_Misc_Key_03
+## SavedVariables: AccountLinkDB
+
+Util.lua
+Comms.lua
+Link.lua

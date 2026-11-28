@@ -1,5 +1,5 @@
 -- Util.lua
--- Helpers shared by the message layer and the sync: printing, names, hashing, packing and
+-- Helpers shared by the message layer and the link: printing, names, hashing, packing and
 -- table diffs.
 
 local _, ns = ...
@@ -7,14 +7,14 @@ local _, ns = ...
 local Util = {}
 ns.Util = Util
 
-Util.PREFIX = "SynSync"
+Util.PREFIX = "AcctLink"
 
 function Util.Print(text)
-	print("|cff33ff99SyndicatorSync:|r " .. text)
+	print("|cff33ff99AccountLink:|r " .. text)
 end
 
 function Util.Debug(text)
-	if SyndicatorSyncDB and SyndicatorSyncDB.debug then
+	if AccountLinkDB and AccountLinkDB.debug then
 		Util.Print("|cff999999" .. text .. "|r")
 	end
 end
@@ -99,7 +99,7 @@ local function SortKeys(a, b)
 end
 
 -- The same hash for the same contents whatever order pairs() walks them in, so two clients can
--- tell whether their copies of a character match.
+-- tell whether their copies of a character's data match.
 function Util.ContentHash(value)
 	local parts = {}
 	local function Walk(v)
@@ -193,7 +193,8 @@ end
 
 -- The changes that turn old into new, as a list of { p = path, v = value } and { p = path, d = true }
 -- (deleted). Tables holding other tables are walked into; tables of plain values, like one item
--- slot, are compared and replaced whole. Looting one item becomes a single small change.
+-- slot in Syndicator's data, are compared and replaced whole. Looting one item becomes a single
+-- small change.
 function Util.Diff(old, new)
 	local changes = {}
 	local path = {}

@@ -4,12 +4,13 @@ Small one-off World of Warcraft addons, mostly for WoW: Forever. Each folder is 
 
 | Addon | What it does |
 | --- | --- |
+| [AccountLink](AccountLink) | Pairs your two accounts for dual-boxing and keeps other addons' data about your characters in step between them while you're grouped. SyndicatorSync uses it. |
 | [AvailableQuestsMap](AvailableQuestsMap) | Puts a "!" on the world map wherever a quest giver has a quest you can pick up right now and lists those quests in the giver's tooltip, using QuestieDB's data. |
 | [Bobber](Bobber) | Lets you fish with the jump key: with a fishing pole in hand and standing still, it casts Fishing and then reels in the catch. Moving, swimming or in combat it jumps as usual. With Upkeep, a clickable reminder to put a lure on the pole. |
 | [CombinedBagOrder](CombinedBagOrder) | Keeps your last bag sort at the bottom of Blizzard's combined bag so new loot fills in from the top, and adds a bank button that shows any character's saved bank from Syndicator in a copy of the bank window. |
 | [GatherReference](GatherReference) | Shows Wowhead's herb, ore and treasure node locations on the world map and minimap. |
 | [PartyOrder](PartyOrder) | Reorders Blizzard's raid-style party frames when you hold Ctrl+Alt and drag one party member onto another. |
-| [SyndicatorSync](SyndicatorSync) | Shares Syndicator's inventory data between two paired accounts in real time, for dual-boxing. |
+| [SyndicatorSync](SyndicatorSync) | Shares Syndicator's inventory data between two paired accounts in real time, for dual-boxing. Needs AccountLink. |
 | [TalentPath](TalentPath) | Follows a Wowhead talent order: paste a talent calculator link for each spec and the talent window marks the next talents to take, going by points spent rather than level. It warns you instead if your talents leave the order. With Upkeep, the next talent also shows as a reminder. |
 | [Tandem](Tandem) | Helps you dual-box: sets of your characters on different accounts find each other at login, group up, switch to free-for-all loot and turn the sound off on all but the main. With Upkeep it adds clickable reminders to focus the main, to cast a login spell such as a stance, and to keep a buff such as Righteous Fury up while you play your set. |
 | [ThreatGap](ThreatGap) | Shows threat on enemy nameplates: a coloured strip on every mob and your exact threat lead or headroom on your target, with tank and non-tank views. |

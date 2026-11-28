@@ -12,7 +12,7 @@
 --   E:tid               end of the chunks; also "how is it going?" when the sender polls
 --   A:tid               received intact
 --   R:tid:list          send these again: chunk numbers, 0 for the header, * for everything
--- Anything else is a control message for Sync (pings, introductions, pairing).
+-- Anything else is a control message for Link (pings, introductions, pairing).
 
 local _, ns = ...
 local Util = ns.Util
@@ -113,7 +113,7 @@ pump:SetScript("OnUpdate", function(self)
 		allowance = allowance - size
 		if status == "offline" then
 			if item.target then
-				ns.Sync.OnPeerGone(item.target)
+				ns.Link.OnPeerGone(item.target)
 			end
 		else
 			if item.channel == "WHISPER" then
@@ -161,7 +161,7 @@ local StartNext
 
 local function GiveUp(peer)
 	Util.Debug("no answer from " .. peer.target .. "; ending the session")
-	ns.Sync.OnPeerGone(peer.target)
+	ns.Link.OnPeerGone(peer.target)
 end
 
 -- Asks the receiver how the current transfer is going: the whole message again for a
@@ -172,7 +172,7 @@ local function Poll(peer)
 		return
 	end
 	transfer.polls = transfer.polls + 1
-	if transfer.polls > MAX_POLLS or not ns.Sync.IsReachable(peer.target) then
+	if transfer.polls > MAX_POLLS or not ns.Link.IsReachable(peer.target) then
 		GiveUp(peer)
 		return
 	end
@@ -330,7 +330,7 @@ local function Deliver(transfer, encoded)
 	Comms.SendControl("WHISPER", transfer.sender, "A:" .. transfer.id)
 	local doc = Util.Unpack(encoded)
 	if doc then
-		ns.Sync.OnDocument(transfer.sender, doc)
+		ns.Link.OnDocument(transfer.sender, doc)
 	else
 		Util.Debug("couldn't unpack a transfer from " .. transfer.sender)
 	end
@@ -546,11 +546,11 @@ function Comms.OnMessage(prefix, text, channel, sender)
 	local handler = handlers[kind]
 	if handler then
 		-- Transfers only count from the peer of an active session.
-		if channel == "WHISPER" and ns.Sync.IsTrusted(sender) then
+		if channel == "WHISPER" and ns.Link.IsTrusted(sender) then
 			handler(sender, Util.Norm(sender), body)
 		end
 	else
-		ns.Sync.OnControl(kind, body, sender, channel)
+		ns.Link.OnControl(kind, body, sender, channel)
 	end
 end
 
@@ -564,7 +564,7 @@ local function FilterNotFound(_, _, message)
 	for target, time in pairs(recentWhispers) do
 		if now - time < 10 and message == ERR_CHAT_PLAYER_NOT_FOUND_S:format(target) then
 			C_Timer.After(0, function()
-				ns.Sync.OnPeerGone(target)
+				ns.Link.OnPeerGone(target)
 			end)
 			return true
 		end

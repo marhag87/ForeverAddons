@@ -26,5 +26,6 @@ run tq_test TrinketQueue/TrinketQueue.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua
 run aqm_offmap_test AvailableQuestsMap/Map.lua onshow
 run link_test TalentPath/Link.lua
+run link_sync_test SyndicatorSync
 run bobber_test Bobber/Bobber.lua
 exit $fail

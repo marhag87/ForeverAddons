@@ -1,42 +1,65 @@
--- Sync.lua
--- Pairing, sessions, and keeping Syndicator's characters in step between two accounts.
+-- Link.lua
+-- Pairing, sessions, and keeping other addons' data about your characters in step between two
+-- accounts.
 --
--- Each account sends only its own characters. What it receives it keeps as copies ("mirrors")
--- inside its own Syndicator data, where tooltips and the rest of Syndicator treat them like any
--- other character. A session starts when two paired characters prove the shared pairing secret
--- to each other. They then compare what they hold, send full copies where theirs differ, and
--- after that only small change lists as Syndicator records new loot, mail, gold and so on.
--- Full copies wait while the player is in an instance, where the game only lets about one
--- message a second through.
+-- Two accounts pair once: a popup on the other client confirms, and both keep a shared secret.
+-- While a character from each is in the same group, they prove the secret to each other and hold
+-- a session.
+--
+-- Addons register datasets: tables keyed by character. This account's characters are its own;
+-- the partner's arrive as copies ("mirrors"). Each account sends only its own characters. At the
+-- start of a session each side tells the other, per dataset, which of its characters it holds,
+-- with a fingerprint of each. The owner sends full copies where those differ, and after that only
+-- small change lists as the addon reports changes. Full copies wait while the sender is in an
+-- instance, where the game only lets about one message a second through.
+--
+-- API (global AccountLink):
+--   AccountLink.Register(name, spec) once the addon's data is ready. spec:
+--     state       a table in the addon's saved variables; AccountLink keeps state.owned
+--                 (characters logged in on this account) and state.mirrors (copies received,
+--                 key -> { partner, rev, updated }) in it.
+--     Store()     returns the table of character key -> data, own characters and copies alike.
+--                 Copies are written into it.
+--     CurrentKey() returns the logged-in character's key.
+--     Valid(data) optional: false drops a received copy.
+--     OnMirrored(key) optional: called after a copy arrived or changed (state.mirrors is set).
+--     title       optional: what the data is, for the pairing popup and /alink.
+--   AccountLink.Changed(name, key)  one of this account's characters changed.
+--   AccountLink.Resync(name)        asks the partner for fresh full copies; nil name: every dataset.
+--   AccountLink.Pair(name), AccountLink.Unpair(), AccountLink.PrintStatus(), AccountLink.ToggleDebug().
 
 local _, ns = ...
 local Util, Comms = ns.Util, ns.Comms
 
-local Sync = {}
-ns.Sync = Sync
+local Link = {}
+ns.Link = Link
+
+AccountLink = {}
 
 local PING_INTERVAL = 60 -- seconds between looking for the other account while not connected
 local INTRO_COOLDOWN = 5 -- seconds before answering another ping from the same name
-local FLUSH_DELAY = 1.5 -- seconds to collect Syndicator changes before sending them
+local FLUSH_DELAY = 1.5 -- seconds to collect changes before sending them
 local PAIR_TIMEOUT = 60 -- seconds a pairing request stays open
 local CHECK_INTERVAL = 600 -- seconds between fingerprint checks of the copies we hold
 local CHECK_TICK = 30 -- seconds between looking whether a check is due and things are quiet
 local QUIET_BEFORE_CHECK = 30 -- seconds without traffic before a check, so copies aren't mid-update
-local SYNDICATOR_EVENTS = {
-	"BagCacheUpdate", "MailCacheUpdate", "EquippedCacheUpdate", "CurrencyCacheUpdate", "AuctionsCacheUpdate",
-	"VoidCacheUpdate",
-}
 
-local db -- SyndicatorSyncDB
+local db -- AccountLinkDB
 local ready = false
-local peers = {} -- partner account id -> { id, name, norm } of the session's other character
+-- name -> { name, spec, shadows, dirty, asked, recheck }, where per character key:
+--   shadows: { partner, rev, data, pending, sentAt }, what the partner holds of it
+--   dirty: true while it has changes not yet sent
+--   asked: true once we've asked for a full copy this session
+--   recheck: fingerprint of the full copy a check made us send
+local datasets = {}
+local order = {} -- dataset names in the order they registered
+-- partner account id -> { id, name, norm, started, boot, lastDoc, lastCheck, theirs, manifests }
+-- for the session's other character. theirs[dataset] = set of its own keys; manifests[dataset]
+-- = its latest manifest, kept for datasets that register here later.
+local peers = {}
 local peerIdByNorm = {} -- normalized name -> partner account id, for active sessions
 local lastIntro = {} -- normalized name -> time we last introduced ourselves after a ping
-local shadows = {} -- character key -> { partner, rev, data, pending }: what the partner holds of it
-local dirty = {} -- character key -> true while it has changes not yet sent
-local deferred = {} -- partner id -> { character key -> rev }: full copies waiting for us to leave an instance
-local asked = {} -- character key -> true once we've asked for a full copy this session
-local recheck = {} -- character key -> fingerprint of the full copy a check made us send
+local deferred = {} -- partner id -> { dataset -> { key -> rev } }: full copies waiting for us to leave an instance
 local flushTimer, rosterTimer
 local pendingPair -- { norm, nonce, expires } while our pairing request waits for an answer
 -- Names this load of the UI in pings and introductions, so a ping that was sent before the
@@ -44,28 +67,14 @@ local pendingPair -- { norm, nonce, expires } while our pairing request waits fo
 local bootId = Util.RandomString(6)
 
 local function InitDB()
-	SyndicatorSyncDB = SyndicatorSyncDB or {}
-	db = SyndicatorSyncDB
+	AccountLinkDB = AccountLinkDB or {}
+	db = AccountLinkDB
 	db.accountId = db.accountId or Util.RandomString(12)
 	db.partners = db.partners or {} -- partner account id -> { secret, characters = { norm -> name }, paired }
-	db.mirrors = db.mirrors or {} -- character key -> { partner, rev, updated }: copies we received
-	db.owned = db.owned or {} -- character key -> true: characters logged in on this account
-end
-
-local function Characters()
-	return SYNDICATOR_DATA and SYNDICATOR_DATA.Characters or {}
-end
-
-local function CurrentKey()
-	return Syndicator.API.GetCurrentCharacter()
 end
 
 -- "First Surname" of the logged-in character, the way other clients see it as a sender.
 local function MyName()
-	local key = CurrentKey()
-	if key then
-		return (key:gsub("%-[^%-]*$", ""))
-	end
 	return Util.FullUnitName("player") or UnitName("player")
 end
 
@@ -75,19 +84,23 @@ local function Proof(secret, from, to)
 	return Util.Hash(secret .. "|" .. Util.Norm(from) .. ">" .. Util.Norm(to) .. "|" .. secret)
 end
 
-local function LooksLikeCharacter(data)
-	return type(data) == "table" and type(data.details) == "table" and type(data.details.character) == "string"
-		and type(data.bags) == "table"
+local function Store(set)
+	return set.spec.Store() or {}
 end
 
--- Tells Syndicator a copy changed, so it recounts its tooltip totals and search results for that
--- character. Only MailCacheUpdate: Syndicator treats it as "everything this character holds may
--- have changed", and fires it itself for characters other than the one logged in (mail sent to an
--- alt). The other cache events are only ever fired for the logged-in character, and addons rely
--- on that: Baganator takes BagCacheUpdate as being about your live bags, so one for a synced
--- character swapped its bag window to that character and sorted your real bags by its layout.
-local function NotifySyndicator(key)
-	Syndicator.CallbackRegistry:TriggerEvent("MailCacheUpdate", key)
+local function Mirrored(set, key)
+	if set.spec.OnMirrored then
+		local ok, err = pcall(set.spec.OnMirrored, key)
+		if not ok then
+			Util.Debug(("%s: OnMirrored failed: %s"):format(set.name, tostring(err)))
+		end
+	end
+end
+
+local function DeferredFor(partnerId, set)
+	deferred[partnerId] = deferred[partnerId] or {}
+	deferred[partnerId][set.name] = deferred[partnerId][set.name] or {}
+	return deferred[partnerId][set.name]
 end
 
 ---------------------------------------------------------------------------------------------
@@ -101,32 +114,32 @@ local function FlushSoon()
 	end
 end
 
-local function SendSnapshot(peer, key, baseRev)
-	local data = Characters()[key]
+local function SendSnapshot(peer, set, key, baseRev)
+	local data = Store(set)[key]
 	if not data then
 		return
 	end
 	local shadow = { partner = peer.id, rev = baseRev + 1, data = Util.Copy(data), pending = true, sentAt = GetTime() }
-	shadows[key] = shadow
-	dirty[key] = nil
-	local sent = Comms.SendDocument(peer.name, { t = "snap", key = key, r = shadow.rev, data = data }, function()
-		shadow.pending = nil
-		if dirty[key] then
-			FlushSoon()
-		end
-	end)
+	set.shadows[key] = shadow
+	set.dirty[key] = nil
+	local sent = Comms.SendDocument(peer.name, { t = "snap", ds = set.name, key = key, r = shadow.rev, data = data },
+		function()
+			shadow.pending = nil
+			if set.dirty[key] then
+				FlushSoon()
+			end
+		end)
 	if not sent then
-		shadows[key] = nil
+		set.shadows[key] = nil
 	end
 end
 
-local function QueueSnapshot(peer, key, baseRev)
+local function QueueSnapshot(peer, set, key, baseRev)
 	if IsInInstance() then
-		deferred[peer.id] = deferred[peer.id] or {}
-		deferred[peer.id][key] = baseRev
-		shadows[key] = nil
+		DeferredFor(peer.id, set)[key] = baseRev
+		set.shadows[key] = nil
 	else
-		SendSnapshot(peer, key, baseRev)
+		SendSnapshot(peer, set, key, baseRev)
 	end
 end
 
@@ -134,51 +147,55 @@ local function SendDeferred()
 	if IsInInstance() then
 		return
 	end
-	for partnerId, keys in pairs(deferred) do
+	for partnerId, byDataset in pairs(deferred) do
 		local peer = peers[partnerId]
 		if peer then
-			for key, rev in pairs(keys) do
-				SendSnapshot(peer, key, rev)
+			for name, keys in pairs(byDataset) do
+				local set = datasets[name]
+				if set then
+					for key, rev in pairs(keys) do
+						SendSnapshot(peer, set, key, rev)
+					end
+				end
 			end
 		end
 		deferred[partnerId] = {}
 	end
 end
 
--- Sends what changed since the partner's copy, for every character Syndicator reported changes on.
--- One change list per character is in flight at a time; later changes wait and go out together.
+-- Sends what changed since the partner's copy, for every character an addon reported changes
+-- on. One change list per character is in flight at a time; later changes wait and go out
+-- together.
 function Flush()
 	flushTimer = nil
-	for key in pairs(dirty) do
-		local shadow = shadows[key]
-		local peer = shadow and peers[shadow.partner]
-		local data = Characters()[key]
-		if not data or db.mirrors[key] then
-			dirty[key] = nil
-		elseif peer and not shadow.pending then
-			dirty[key] = nil
-			local changes = Util.Diff(shadow.data, data)
-			if #changes > 0 then
-				local base = shadow.rev
-				shadow.rev = base + 1
-				Util.Apply(shadow.data, changes)
-				shadow.pending = true
-				shadow.sentAt = GetTime()
-				Comms.SendDocument(peer.name, { t = "delta", key = key, b = base, r = shadow.rev, c = changes }, function()
-					shadow.pending = nil
-					if dirty[key] then
-						FlushSoon()
-					end
-				end)
+	for _, name in ipairs(order) do
+		local set = datasets[name]
+		local store, mirrors = Store(set), set.spec.state.mirrors
+		for key in pairs(set.dirty) do
+			local shadow = set.shadows[key]
+			local peer = shadow and peers[shadow.partner]
+			local data = store[key]
+			if not data or mirrors[key] then
+				set.dirty[key] = nil
+			elseif peer and not shadow.pending then
+				set.dirty[key] = nil
+				local changes = Util.Diff(shadow.data, data)
+				if #changes > 0 then
+					local base = shadow.rev
+					shadow.rev = base + 1
+					Util.Apply(shadow.data, changes)
+					shadow.pending = true
+					shadow.sentAt = GetTime()
+					Comms.SendDocument(peer.name, { t = "delta", ds = name, key = key, b = base, r = shadow.rev, c = changes },
+						function()
+							shadow.pending = nil
+							if set.dirty[key] then
+								FlushSoon()
+							end
+						end)
+				end
 			end
 		end
-	end
-end
-
-local function OnSyndicatorChange(_, key)
-	if ready and type(key) == "string" and not db.mirrors[key] then
-		dirty[key] = true
-		FlushSoon()
 	end
 end
 
@@ -193,9 +210,11 @@ local function EndSession(partnerId)
 	peers[partnerId] = nil
 	peerIdByNorm[peer.norm] = nil
 	Comms.Forget(peer.name)
-	for key, shadow in pairs(shadows) do
-		if shadow.partner == partnerId then
-			shadows[key] = nil
+	for _, set in pairs(datasets) do
+		for key, shadow in pairs(set.shadows) do
+			if shadow.partner == partnerId then
+				set.shadows[key] = nil
+			end
 		end
 	end
 	deferred[partnerId] = nil
@@ -203,10 +222,11 @@ local function EndSession(partnerId)
 end
 
 -- A fingerprint of each copy we hold of the partner's characters.
-local function HeldFingerprints(peer)
+local function HeldFingerprints(peer, set)
 	local have = {}
-	for key, mirror in pairs(db.mirrors) do
-		local data = Characters()[key]
+	local store = Store(set)
+	for key, mirror in pairs(set.spec.state.mirrors) do
+		local data = store[key]
 		if mirror.partner == peer.id and data then
 			have[key] = { h = Util.ContentHash(data), r = mirror.rev or 0 }
 		end
@@ -217,12 +237,13 @@ end
 -- Tells the partner which of its characters we hold (with a fingerprint of each), and which
 -- characters are ours. With fresh, claims to hold nothing, so the partner sends full copies of
 -- everything.
-local function SendManifest(peer, fresh)
+local function SendManifest(peer, set, fresh)
 	local own = {}
-	for key in pairs(db.owned) do
+	for key in pairs(set.spec.state.owned) do
 		own[#own + 1] = key
 	end
-	Comms.SendDocument(peer.name, { t = "manifest", have = fresh and {} or HeldFingerprints(peer), own = own })
+	Comms.SendDocument(peer.name, { t = "manifest", ds = set.name, have = fresh and {} or HeldFingerprints(peer, set),
+		own = own })
 end
 
 -- Every so often, while nothing is moving, the fingerprints of our copies go to the partner
@@ -234,7 +255,9 @@ local function CheckPeers()
 			and not Comms.IsBusy(peer.name) then
 			peer.lastCheck = now
 			Util.Debug("checking copies with " .. peer.name)
-			Comms.SendDocument(peer.name, { t = "check", have = HeldFingerprints(peer) })
+			for _, name in ipairs(order) do
+				Comms.SendDocument(peer.name, { t = "check", ds = name, have = HeldFingerprints(peer, datasets[name]) })
+			end
 		end
 	end
 end
@@ -242,16 +265,20 @@ end
 local function StartSession(partnerId, name)
 	local old = peers[partnerId]
 	EndSession(partnerId)
-	local peer = { id = partnerId, name = name, norm = Util.Norm(name), started = GetTime(), theirs = {} }
+	local peer = { id = partnerId, name = name, norm = Util.Norm(name), started = GetTime(), theirs = {}, manifests = {} }
 	peers[partnerId] = peer
 	peerIdByNorm[peer.norm] = partnerId
 	deferred[partnerId] = {}
-	wipe(asked)
-	wipe(recheck)
+	for _, set in pairs(datasets) do
+		wipe(set.asked)
+		wipe(set.recheck)
+	end
 	db.partners[partnerId].characters[peer.norm] = name
-	SendManifest(peer)
+	for _, setName in ipairs(order) do
+		SendManifest(peer, datasets[setName])
+	end
 	if not old or old.norm ~= peer.norm then
-		Util.Print("syncing with " .. name)
+		Util.Print("linked with " .. name)
 	end
 end
 
@@ -290,12 +317,12 @@ local function Ping()
 	end
 end
 
-function Sync.IsTrusted(sender)
+function Link.IsTrusted(sender)
 	return peerIdByNorm[Util.Norm(sender)] ~= nil
 end
 
 -- False only when the name is in our group and shown as offline.
-function Sync.IsReachable(target)
+function Link.IsReachable(target)
 	local norm = Util.Norm(target)
 	for i = 1, GetNumSubgroupMembers() do
 		local unit = "party" .. i
@@ -308,7 +335,7 @@ function Sync.IsReachable(target)
 	return true
 end
 
-function Sync.OnPeerGone(target)
+function Link.OnPeerGone(target)
 	local norm = Util.Norm(target)
 	if pendingPair and pendingPair.norm == norm then
 		pendingPair = nil
@@ -323,12 +350,12 @@ end
 ---------------------------------------------------------------------------------------------
 -- Receiving the partner's characters.
 
-local function Accepts(peer, key)
+local function Accepts(peer, set, key)
 	if type(key) ~= "string" then
 		return false
 	end
-	if key == CurrentKey() or db.owned[key] then
-		Util.Debug(("ignored %s from %s: it belongs to this account"):format(key, peer.name))
+	if key == set.spec.CurrentKey() or set.spec.state.owned[key] then
+		Util.Debug(("ignored %s %s from %s: it belongs to this account"):format(set.name, key, peer.name))
 		return false
 	end
 	return true
@@ -338,30 +365,31 @@ local documents = {}
 
 -- What the partner holds of our characters decides what we send: a full copy where its copy is
 -- missing or differs, nothing where it matches.
-function documents.manifest(peer, doc)
+function documents.manifest(peer, set, doc)
+	local state, store = set.spec.state, Store(set)
 	local theirs = {}
 	for _, key in ipairs(type(doc.own) == "table" and doc.own or {}) do
 		if type(key) == "string" then
 			theirs[key] = true
 			-- They've logged in on it, so it's theirs, even if we hold a copy we took for ours.
-			if not db.owned[key] and not db.mirrors[key] and key ~= CurrentKey() and Characters()[key] then
-				db.mirrors[key] = { partner = peer.id, rev = -1 }
+			if not state.owned[key] and not state.mirrors[key] and key ~= set.spec.CurrentKey() and store[key] then
+				state.mirrors[key] = { partner = peer.id, rev = -1 }
 			end
 		end
 	end
-	peer.theirs = theirs
+	peer.theirs[set.name] = theirs
 	local have = type(doc.have) == "table" and doc.have or {}
-	for key, data in pairs(Characters()) do
-		if not db.mirrors[key] and not theirs[key] then
+	for key, data in pairs(store) do
+		if not state.mirrors[key] and not theirs[key] then
 			local held = type(have[key]) == "table" and have[key] or nil
 			local heldRev = held and tonumber(held.r) or 0
 			if held and held.h == Util.ContentHash(data) then
-				shadows[key] = { partner = peer.id, rev = heldRev, data = Util.Copy(data) }
-				if dirty[key] then
+				set.shadows[key] = { partner = peer.id, rev = heldRev, data = Util.Copy(data) }
+				if set.dirty[key] then
 					FlushSoon()
 				end
 			else
-				QueueSnapshot(peer, key, heldRev)
+				QueueSnapshot(peer, set, key, heldRev)
 			end
 		end
 	end
@@ -369,81 +397,94 @@ end
 
 -- The partner's periodic fingerprints of its copies of our characters. Characters with changes
 -- on the way, or sent recently, are left out: their copies may simply not have caught up yet.
-function documents.check(peer, doc)
+function documents.check(peer, set, doc)
+	local state = set.spec.state
 	local have = type(doc.have) == "table" and doc.have or {}
 	local now = GetTime()
-	local waiting = deferred[peer.id] or {}
-	for key, data in pairs(Characters()) do
-		local shadow = shadows[key]
-		local busy = dirty[key] or waiting[key] ~= nil
+	local waiting = deferred[peer.id] and deferred[peer.id][set.name] or {}
+	local theirs = peer.theirs[set.name] or {}
+	for key, data in pairs(Store(set)) do
+		local shadow = set.shadows[key]
+		local busy = set.dirty[key] or waiting[key] ~= nil
 			or (shadow and (shadow.pending or now - (shadow.sentAt or 0) < QUIET_BEFORE_CHECK))
-		if not db.mirrors[key] and not peer.theirs[key] and not busy then
+		if not state.mirrors[key] and not theirs[key] and not busy then
 			local held = type(have[key]) == "table" and have[key] or nil
 			local current = Util.ContentHash(data)
 			if held and held.h == current then
-				recheck[key] = nil
+				set.recheck[key] = nil
 				if not shadow then
-					shadows[key] = { partner = peer.id, rev = tonumber(held.r) or 0, data = Util.Copy(data) }
+					set.shadows[key] = { partner = peer.id, rev = tonumber(held.r) or 0, data = Util.Copy(data) }
 				end
-			elseif recheck[key] == current then
+			elseif set.recheck[key] == current then
 				-- A full copy of exactly this data already went over and still doesn't match:
 				-- something in the packing, not drift. Sending it again wouldn't help.
-				Util.Debug(("%s still differs on %s's side after a full copy; not sending it again"):format(key, peer.name))
+				Util.Debug(("%s %s still differs on %s's side after a full copy; not sending it again"):format(set.name,
+					key, peer.name))
 			else
-				Util.Debug(("%s differs on %s's side; sending a full copy"):format(key, peer.name))
-				recheck[key] = current
-				QueueSnapshot(peer, key, held and tonumber(held.r) or (shadow and shadow.rev) or 0)
+				Util.Debug(("%s %s differs on %s's side; sending a full copy"):format(set.name, key, peer.name))
+				set.recheck[key] = current
+				QueueSnapshot(peer, set, key, held and tonumber(held.r) or (shadow and shadow.rev) or 0)
 			end
 		end
 	end
 end
 
-function documents.snap(peer, doc)
-	if not Accepts(peer, doc.key) or not LooksLikeCharacter(doc.data) then
+function documents.snap(peer, set, doc)
+	if not Accepts(peer, set, doc.key) or (set.spec.Valid and not set.spec.Valid(doc.data)) then
 		return
 	end
-	SYNDICATOR_DATA.Characters[doc.key] = doc.data
-	db.mirrors[doc.key] = { partner = peer.id, rev = tonumber(doc.r) or 0, updated = time() }
-	asked[doc.key] = nil
-	NotifySyndicator(doc.key)
+	Store(set)[doc.key] = doc.data
+	set.spec.state.mirrors[doc.key] = { partner = peer.id, rev = tonumber(doc.r) or 0, updated = time() }
+	set.asked[doc.key] = nil
+	Mirrored(set, doc.key)
 end
 
-function documents.delta(peer, doc)
-	if not Accepts(peer, doc.key) or type(doc.c) ~= "table" then
+function documents.delta(peer, set, doc)
+	if not Accepts(peer, set, doc.key) or type(doc.c) ~= "table" then
 		return
 	end
-	local mirror = db.mirrors[doc.key]
-	local data = Characters()[doc.key]
+	local mirror = set.spec.state.mirrors[doc.key]
+	local data = Store(set)[doc.key]
 	if not (mirror and data and mirror.partner == peer.id and mirror.rev == doc.b) then
 		-- Our copy is out of step (or was deleted): ask once for a full one.
-		if not asked[doc.key] then
-			asked[doc.key] = true
-			Util.Debug(("copy of %s is out of step; asking for a full one"):format(doc.key))
-			Comms.SendDocument(peer.name, { t = "need", keys = { doc.key } })
+		if not set.asked[doc.key] then
+			set.asked[doc.key] = true
+			Util.Debug(("copy of %s %s is out of step; asking for a full one"):format(set.name, doc.key))
+			Comms.SendDocument(peer.name, { t = "need", ds = set.name, keys = { doc.key } })
 		end
 		return
 	end
 	Util.Apply(data, doc.c)
 	mirror.rev = doc.r
 	mirror.updated = time()
-	NotifySyndicator(doc.key)
+	Mirrored(set, doc.key)
 end
 
-function documents.need(peer, doc)
+function documents.need(peer, set, doc)
+	local store, mirrors = Store(set), set.spec.state.mirrors
 	for _, key in ipairs(type(doc.keys) == "table" and doc.keys or {}) do
-		if type(key) == "string" and not db.mirrors[key] and Characters()[key] then
-			local shadow = shadows[key]
-			QueueSnapshot(peer, key, shadow and shadow.rev or 0)
+		if type(key) == "string" and not mirrors[key] and store[key] then
+			local shadow = set.shadows[key]
+			QueueSnapshot(peer, set, key, shadow and shadow.rev or 0)
 		end
 	end
 end
 
-function Sync.OnDocument(sender, doc)
+-- Documents for a dataset that isn't registered here are dropped, except the manifest: it's
+-- kept, so the dataset can answer it if its addon registers later in the session.
+function Link.OnDocument(sender, doc)
 	local peer = peers[peerIdByNorm[Util.Norm(sender)] or ""]
 	local handler = peer and type(doc.t) == "string" and documents[doc.t]
-	if handler then
-		peer.lastDoc = GetTime()
-		handler(peer, doc)
+	if not handler or type(doc.ds) ~= "string" then
+		return
+	end
+	peer.lastDoc = GetTime()
+	if doc.t == "manifest" then
+		peer.manifests[doc.ds] = doc
+	end
+	local set = datasets[doc.ds]
+	if set then
+		handler(peer, set, doc)
 	end
 end
 
@@ -452,10 +493,18 @@ end
 
 local confirm
 
+local function Titles()
+	local titles = {}
+	for _, name in ipairs(order) do
+		titles[#titles + 1] = datasets[name].spec.title or name
+	end
+	return titles
+end
+
 local function ShowPairConfirm(name, onAccept, onDecline)
 	if not confirm then
-		confirm = CreateFrame("Frame", "SyndicatorSyncPairConfirm", UIParent)
-		confirm:SetSize(380, 140)
+		confirm = CreateFrame("Frame", "AccountLinkPairConfirm", UIParent)
+		confirm:SetSize(380, 150)
 		confirm:SetPoint("TOP", 0, -160)
 		confirm:SetFrameStrata("DIALOG")
 		confirm:SetToplevel(true)
@@ -497,7 +546,9 @@ local function ShowPairConfirm(name, onAccept, onDecline)
 	confirm:Hide() -- a new request replaces one still open
 	confirm.answered = false
 	confirm.onAccept, confirm.onDecline = onAccept, onDecline
-	confirm.Text:SetText(("%s wants to pair your accounts, so both share their Syndicator data with each other.\n\nPair with that account?"):format(name))
+	local titles = Titles()
+	confirm.Text:SetText(("%s wants to pair your accounts, so both share data about your characters with each other%s.\n\nPair with that account?")
+		:format(name, #titles > 0 and (" (" .. table.concat(titles, ", ") .. ")") or ""))
 	confirm:Show()
 	confirm.timer = C_Timer.NewTimer(PAIR_TIMEOUT, function()
 		confirm:Hide()
@@ -596,7 +647,7 @@ function control.PD(sender, _, body)
 	end
 end
 
-function Sync.OnControl(kind, body, sender, channel)
+function Link.OnControl(kind, body, sender, channel)
 	local handler = ready and control[kind]
 	if handler then
 		handler(sender, channel, body)
@@ -604,7 +655,97 @@ function Sync.OnControl(kind, body, sender, channel)
 end
 
 ---------------------------------------------------------------------------------------------
--- Commands.
+-- API for other addons
+
+function AccountLink.Register(name, spec)
+	if type(name) ~= "string" or type(spec) ~= "table" or type(spec.state) ~= "table" or type(spec.Store) ~= "function"
+		or type(spec.CurrentKey) ~= "function" then
+		error("Usage: AccountLink.Register(name, { state = table, Store = function, CurrentKey = function, ... })", 2)
+	end
+	if datasets[name] then
+		error("AccountLink: dataset " .. name .. " is already registered", 2)
+	end
+	local state = spec.state
+	state.owned = state.owned or {}
+	state.mirrors = state.mirrors or {}
+	local current = spec.CurrentKey()
+	if current then
+		state.owned[current] = true
+		state.mirrors[current] = nil
+	end
+	local set = { name = name, spec = spec, shadows = {}, dirty = {}, asked = {}, recheck = {} }
+	datasets[name] = set
+	order[#order + 1] = name
+	-- Sessions already running learn about it now.
+	for _, peer in pairs(peers) do
+		SendManifest(peer, set)
+		if peer.manifests[name] then
+			documents.manifest(peer, set, peer.manifests[name])
+		end
+	end
+end
+
+function AccountLink.Changed(name, key)
+	local set = datasets[name]
+	if set and type(key) == "string" and not set.spec.state.mirrors[key] then
+		set.dirty[key] = true
+		FlushSoon()
+	end
+end
+
+-- Returns true if a partner was connected to ask.
+function AccountLink.Resync(name)
+	local any = false
+	for _, peer in pairs(peers) do
+		for _, setName in ipairs(order) do
+			if not name or name == setName then
+				SendManifest(peer, datasets[setName], true)
+			end
+		end
+		any = true
+	end
+	return any
+end
+
+-- Takes over a pairing made by an older version of an addon (SyndicatorSync before AccountLink),
+-- so the accounts don't have to pair again. Only while AccountLink has no pairing of its own.
+function AccountLink.Adopt(accountId, partners)
+	if not db or next(db.partners) or type(accountId) ~= "string" or type(partners) ~= "table" or not next(partners) then
+		return false
+	end
+	db.accountId = accountId
+	db.partners = partners
+	return true
+end
+
+function AccountLink.Pair(name)
+	if not ready then
+		Util.Print("still loading; try again in a moment")
+		return
+	end
+	if not name or name == "" then
+		Util.Print("usage: /alink pair <name of your other account's character>")
+		return
+	end
+	local target = Util.CompleteName(name)
+	pendingPair = { norm = Util.Norm(target), nonce = Util.RandomString(8), expires = GetTime() + PAIR_TIMEOUT }
+	Comms.SendControl("WHISPER", target, ("PQ:%s:%s"):format(db.accountId, pendingPair.nonce))
+	Util.Print(("asked %s to pair; accept the popup on that client"):format(target))
+end
+
+function AccountLink.Unpair()
+	for partnerId in pairs(db.partners) do
+		EndSession(partnerId)
+	end
+	wipe(db.partners)
+	Util.Print("unpaired")
+end
+
+function AccountLink.ToggleDebug()
+	db.debug = not db.debug
+	Util.Print("details " .. (db.debug and "shown" or "hidden"))
+	return db.debug
+end
 
 local function Age(seconds)
 	if seconds < 60 then
@@ -616,10 +757,11 @@ local function Age(seconds)
 	end
 	return math.floor(seconds / 86400) .. " days ago"
 end
+AccountLink.Age = Age
 
-local function Status()
+function AccountLink.PrintStatus()
 	if not next(db.partners) then
-		Util.Print("not paired. Group with your other account's character and type /ssync pair <its name>")
+		Util.Print("not paired. Group with your other account's character and type /alink pair <its name>")
 	end
 	for partnerId, partner in pairs(db.partners) do
 		local names = {}
@@ -629,74 +771,53 @@ local function Status()
 		table.sort(names)
 		local peer = peers[partnerId]
 		Util.Print(("paired with %s; %s"):format(table.concat(names, ", "),
-			peer and ("syncing with " .. peer.name) or "not connected (it connects while you're grouped)"))
+			peer and ("linked with " .. peer.name) or "not connected (it connects while you're grouped)"))
 	end
-	local copies = {}
-	for key, mirror in pairs(db.mirrors) do
-		copies[#copies + 1] = key .. (mirror.updated and (" (" .. Age(time() - mirror.updated) .. ")") or "")
+	local lines = {}
+	for _, name in ipairs(order) do
+		local count = 0
+		for _ in pairs(datasets[name].spec.state.mirrors) do
+			count = count + 1
+		end
+		lines[#lines + 1] = ("%s (%d %s held)"):format(datasets[name].spec.title or name, count,
+			count == 1 and "copy" or "copies")
 	end
-	table.sort(copies)
-	Util.Print("copies held: " .. (#copies > 0 and table.concat(copies, ", ") or "none"))
+	Util.Print("shared: " .. (#lines > 0 and table.concat(lines, ", ") or "nothing yet; no addon has registered"))
 	local waiting = Comms.QueueLength()
 	if waiting > 0 then
 		Util.Print(waiting .. " messages waiting to be sent")
 	end
 end
 
+---------------------------------------------------------------------------------------------
+-- Commands.
+
 local function Help()
-	Util.Print("/ssync - status")
-	Util.Print("/ssync pair <name> - pair with your other account's character (both online)")
-	Util.Print("/ssync resync - ask the other account to send fresh copies of its characters")
-	Util.Print("/ssync unpair - stop syncing with the other account")
-	Util.Print("/ssync forget - remove the other account's characters from Syndicator here")
-	Util.Print("/ssync debug - show or hide details of what's sent")
+	Util.Print("/alink - status")
+	Util.Print("/alink pair <name> - pair with your other account's character (both online, grouped)")
+	Util.Print("/alink resync - ask the other account to send fresh copies of everything")
+	Util.Print("/alink unpair - stop sharing with the other account")
+	Util.Print("/alink debug - show or hide details of what's sent")
 end
 
-SLASH_SYNDICATORSYNC1 = "/ssync"
-SlashCmdList.SYNDICATORSYNC = function(message)
+SLASH_ACCOUNTLINK1 = "/alink"
+SlashCmdList.ACCOUNTLINK = function(message)
 	if not ready then
-		Util.Print("waiting for Syndicator to finish loading")
+		Util.Print("still loading; try again in a moment")
 		return
 	end
 	local command, rest = message:match("^%s*(%S*)%s*(.-)%s*$")
 	command = command:lower()
 	if command == "" or command == "status" then
-		Status()
+		AccountLink.PrintStatus()
 	elseif command == "pair" then
-		if rest == "" then
-			Util.Print("usage: /ssync pair <name of your other account's character>")
-			return
-		end
-		local target = Util.CompleteName(rest)
-		pendingPair = { norm = Util.Norm(target), nonce = Util.RandomString(8), expires = GetTime() + PAIR_TIMEOUT }
-		Comms.SendControl("WHISPER", target, ("PQ:%s:%s"):format(db.accountId, pendingPair.nonce))
-		Util.Print(("asked %s to pair; accept the popup on that client"):format(target))
+		AccountLink.Pair(rest)
 	elseif command == "resync" then
-		local any = false
-		for _, peer in pairs(peers) do
-			SendManifest(peer, true)
-			any = true
-		end
-		Util.Print(any and "asked for fresh copies" or "not connected to the other account right now")
+		Util.Print(AccountLink.Resync() and "asked for fresh copies" or "not connected to the other account right now")
 	elseif command == "unpair" then
-		for partnerId in pairs(db.partners) do
-			EndSession(partnerId)
-		end
-		wipe(db.partners)
-		Util.Print("unpaired. The other account's characters stay in Syndicator; /ssync forget removes them")
-	elseif command == "forget" then
-		local count = 0
-		for key in pairs(db.mirrors) do
-			if Characters()[key] and pcall(Syndicator.API.DeleteCharacter, key) then
-				count = count + 1
-			end
-		end
-		wipe(db.mirrors)
-		Util.Print(("removed %d characters from Syndicator.%s"):format(count,
-			next(db.partners) and " While paired they come back at the next sync; /ssync unpair stops that" or ""))
+		AccountLink.Unpair()
 	elseif command == "debug" then
-		db.debug = not db.debug
-		Util.Print("details " .. (db.debug and "shown" or "hidden"))
+		AccountLink.ToggleDebug()
 	else
 		Help()
 	end
@@ -704,25 +825,8 @@ end
 
 ---------------------------------------------------------------------------------------------
 
-local function OnReady()
-	if ready then
-		return
-	end
-	ready = true
-	local current = CurrentKey()
-	if current then
-		db.owned[current] = true
-		db.mirrors[current] = nil
-	end
-	for _, event in ipairs(SYNDICATOR_EVENTS) do
-		Syndicator.CallbackRegistry:RegisterCallback(event, OnSyndicatorChange, Sync)
-	end
-	C_Timer.After(3, Ping)
-	C_Timer.NewTicker(PING_INTERVAL, Ping)
-	C_Timer.NewTicker(CHECK_TICK, CheckPeers)
-end
-
 local events = CreateFrame("Frame")
+events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("CHAT_MSG_ADDON")
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -732,14 +836,16 @@ events:SetScript("OnEvent", function(_, event, ...)
 		if ready then
 			Comms.OnMessage(...)
 		end
-	elseif event == "PLAYER_LOGIN" then
-		InitDB()
-		C_ChatInfo.RegisterAddonMessagePrefix(Util.PREFIX)
-		if Syndicator.API.IsReady() then
-			OnReady()
-		else
-			Syndicator.CallbackRegistry:RegisterCallback("Ready", OnReady, "SyndicatorSyncReady")
+	elseif event == "ADDON_LOADED" then
+		if ... == "AccountLink" then
+			InitDB() -- before the addons that depend on it load, so they can adopt an old pairing
 		end
+	elseif event == "PLAYER_LOGIN" then
+		C_ChatInfo.RegisterAddonMessagePrefix(Util.PREFIX)
+		ready = true
+		C_Timer.After(3, Ping)
+		C_Timer.NewTicker(PING_INTERVAL, Ping)
+		C_Timer.NewTicker(CHECK_TICK, CheckPeers)
 	elseif event == "GROUP_ROSTER_UPDATE" then
 		if ready and not rosterTimer then
 			rosterTimer = C_Timer.NewTimer(3, function()
