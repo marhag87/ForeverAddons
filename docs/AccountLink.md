@@ -1,5 +1,5 @@
 # AccountLink
-Pairs two accounts for dual-boxing and keeps other addons' per-character data in step between them while their characters are grouped. Extracted from SyndicatorSync 1.0.2 (2026-11-28); SyndicatorSync 1.1.0 is its first user, a profession cooldown tracker is planned as the second.
+Pairs two accounts for dual-boxing and keeps other addons' per-character data in step between them while their characters are grouped. Extracted from SyndicatorSync 1.0.2 (2026-11-28); SyndicatorSync 1.1.0 is its first user, CraftTimers (profession cooldowns, dataset "crafttimers") the second.
 
 ## Files
 - `Util.lua`: `PREFIX` ("AcctLink"), `Print`/`Debug`, `IsHidden`, `FullUnitName`, `Norm`, `CompleteName` (first name → full, party only), `RandomString`, `Hash` (two polynomial hashes kept below 2^31, as "a.b"), `ContentHash` (independent of pairs order), `Pack`/`Unpack` (`C_EncodingUtil` CBOR + compress + Base64), `Copy`, `Equal`, `Diff`/`Apply` (path change lists).

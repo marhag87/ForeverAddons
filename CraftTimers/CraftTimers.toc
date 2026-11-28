@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: Craft Timers
+## Notes: Profession cooldowns (transmutes, Mooncloth, Salt Shaker, Dedicated Study) for all your characters behind a minimap button that flashes when one is ready. With Account Link, your other account's characters too. /ct
+## Author: Martin
+## Version: 1.0.0
+## OptionalDeps: AccountLink
+## IconTexture: Interface\Icons\INV_Misc_PocketWatch_01
+## SavedVariables: CraftTimersDB
+
+CraftTimers.lua
